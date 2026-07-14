@@ -42,6 +42,9 @@ python3 -m pip install -r requirements.txt
 # 查看某期工作流文件是否齐全
 python3 scripts/run_ai_daily.py status --date YYYY-MM-DD
 
+# 仅检查测试/正式名单组的状态、版本、人数和指纹，不显示邮箱
+python3 scripts/run_ai_daily.py recipients
+
 # 自动选源：新闻至少 5 条、不设上限；输出会显示预估阅读时长
 python3 scripts/run_ai_daily.py select --date YYYY-MM-DD
 
@@ -56,6 +59,20 @@ python3 scripts/run_ai_daily.py prod --date YYYY-MM-DD --skip-build --ask-passwo
 ```
 
 每次 HTML 构建完成后，脚本会打印对应日期的正式发送命令。
+
+## 收件人名单
+
+`config/recipients.json` 支持名单组 ID、版本、启用状态和成员信息。每次邮件打包会在包内生成不可变的 `recipient_snapshot.json`；发送和发送记录都使用这份快照，因此不会因打包后的名单变动而错发。
+
+本地旧格式仍能运行，但会显示为 `legacy v0`。中台部署前应迁移到示例文件中的 `schema_version: 1` 格式，并在每次修改成员时递增对应名单组的 `version`。
+
+现有旧名单可以原样迁移并自动备份：
+
+```bash
+python3 scripts/migrate_recipient_registry.py --write
+```
+
+字段和未来数据库映射见 [收件人名单说明](docs/RECIPIENT_REGISTRY.md)。
 
 ## 图像 Provider
 

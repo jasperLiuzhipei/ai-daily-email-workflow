@@ -25,6 +25,14 @@ from typing import Any
 
 from ai_daily_common import write_json_object
 from build_ai_daily_email import assign_issue, load_ledger, parse_run_date
+from email_recipients import (
+    DEFAULT_RECIPIENT_CONFIG,
+    RECIPIENT_SNAPSHOT_NAME,
+    RecipientError,
+    delivery_fingerprint,
+    load_recipient_registry,
+    load_recipient_snapshot,
+)
 from verify_research_image_lineage import LineageError, verify_lineage
 from image_provider_registry import ImageProviderError
 
@@ -155,6 +163,30 @@ def run_status(paths: Paths, args: argparse.Namespace) -> None:
     print(f"AI Daily status: {paths.run_date}")
     for label, path in checks:
         print(f"{label:22} {file_status(path):18} {path}")
+
+
+def run_recipients(args: argparse.Namespace) -> None:
+    """Inspect registry metadata without printing member email addresses."""
+
+    try:
+        registry = load_recipient_registry(args.recipient_config)
+    except RecipientError as exc:
+        raise WorkflowError(str(exc)) from exc
+    print(f"Recipient registry: {args.recipient_config}")
+    for key in sorted(registry):
+        group = registry[key]
+        state = "enabled" if group["enabled"] else "disabled"
+        group_meta = {
+            field: group[field]
+            for field in ("key", "id", "name", "version", "enabled", "source_format")
+        }
+        fingerprint = delivery_fingerprint(group_meta, group["members"])
+        print(
+            f"- {key}: {group['name']} | {group['id']} | v{group['version']} | "
+            f"{state} | {len(group['members'])} recipients | {fingerprint[:12]}"
+        )
+        if group["source_format"] == "legacy_flat_json":
+            print("  migration note: legacy flat JSON; move to registry schema before middle-platform deployment.")
 
 
 def run_select(paths: Paths, args: argparse.Namespace) -> None:
@@ -304,6 +336,8 @@ def run_package(paths: Paths, recipient_list: str, package_dir: Path, args: argp
         str(paths.html),
         "--recipient-list",
         recipient_list,
+        "--recipient-config",
+        str(args.recipient_config),
         "--out-dir",
         str(package_dir),
         "--overwrite",
@@ -358,6 +392,9 @@ def run_send(eml: Path, recipient_list: str, args: argparse.Namespace) -> None:
         recipient_list,
         *smtp_args(args),
     ]
+    snapshot_path = eml.parent / RECIPIENT_SNAPSHOT_NAME
+    if snapshot_path.exists():
+        cmd.extend(["--recipient-snapshot", str(snapshot_path)])
     run_cmd(cmd, dry_label=f"send {recipient_list}")
 
 
@@ -384,6 +421,11 @@ def commit_send_ledger(paths: Paths, args: argparse.Namespace, eml: Path, issue:
     prod = ledger.setdefault("prod", {})
     if not isinstance(prod, dict):
         raise WorkflowError(f"{args.send_ledger} prod section must be an object.")
+    snapshot_path = eml.parent / RECIPIENT_SNAPSHOT_NAME
+    try:
+        delivery = load_recipient_snapshot(snapshot_path)
+    except RecipientError as exc:
+        raise WorkflowError(f"Missing valid recipient snapshot for send record: {exc}") from exc
     prod[paths.run_date] = {
         "sent_at": datetime.now().astimezone().isoformat(),
         "series": args.series,
@@ -393,6 +435,12 @@ def commit_send_ledger(paths: Paths, args: argparse.Namespace, eml: Path, issue:
         "html": str(paths.html),
         "eml": str(eml),
         "recipient_list": "prod",
+        "recipient_delivery": {
+            "recipient_group": delivery.get("recipient_group"),
+            "recipient_count": delivery["recipient_count"],
+            "fingerprint": delivery["fingerprint"],
+            "snapshot": str(snapshot_path),
+        },
     }
     write_json_object(args.send_ledger, ledger)
     print(f"Committed prod send record for {paths.run_date}: {args.send_ledger}")
@@ -429,9 +477,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run AI daily deterministic workflow steps.")
     parser.add_argument(
         "action",
-        choices=["status", "select", "build", "package-test", "package-prod", "test", "prod"],
+        choices=["status", "recipients", "select", "build", "package-test", "package-prod", "test", "prod"],
         help=(
-            "status: show paths; select: AIHot + BestBlogs source selection; build: render HTML; "
+            "status: show paths; recipients: inspect recipient group metadata; "
+            "select: AIHot + BestBlogs source selection; build: render HTML; "
             "package-test/prod: create .eml only; test/prod: package and SMTP dry-run/send."
         ),
     )
@@ -518,6 +567,12 @@ def parse_args() -> argparse.Namespace:
         help="Successful prod-send ledger used by source selection dedupe.",
     )
     parser.add_argument("--skip-build", action="store_true", help="For test/prod actions, use existing HTML.")
+    parser.add_argument(
+        "--recipient-config",
+        type=Path,
+        default=DEFAULT_RECIPIENT_CONFIG,
+        help="Local recipient registry JSON. Future deployments replace this adapter with a database service.",
+    )
     parser.add_argument("--email-settings", type=Path, default=DEFAULT_EMAIL_SETTINGS)
     parser.add_argument("--from-addr")
     parser.add_argument("--smtp-host")
@@ -543,6 +598,8 @@ def main() -> None:
     try:
         if args.action == "status":
             run_status(paths, args)
+        elif args.action == "recipients":
+            run_recipients(args)
         elif args.action == "select":
             run_select(paths, args)
         elif args.action == "build":

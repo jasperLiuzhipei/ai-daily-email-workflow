@@ -34,7 +34,14 @@ from urllib.request import Request, urlopen
 from bs4 import BeautifulSoup
 from PIL import Image, UnidentifiedImageError
 
-from email_recipients import DEFAULT_RECIPIENT_CONFIG, RecipientError, formatted_addresses, resolve_recipients
+from email_recipients import (
+    DEFAULT_RECIPIENT_CONFIG,
+    RECIPIENT_SNAPSHOT_NAME,
+    RecipientError,
+    formatted_addresses,
+    resolve_recipient_delivery,
+    write_recipient_snapshot,
+)
 
 
 DEFAULT_MAX_BYTES = 1_000_000
@@ -317,7 +324,7 @@ def write_readme(
     eml_path: Path,
     body_path: Path,
     subject: str,
-    to_addrs: list[str],
+    delivery: dict,
     images: list[InlineImage],
     max_bytes: int,
 ) -> None:
@@ -326,12 +333,13 @@ def write_readme(
         "",
         f"源 HTML: {html_path}",
         f"邮件主题: {subject}",
-        f"收件人数量: {len(to_addrs)}",
+        f"收件人数量: {delivery['recipient_count']}",
         "",
         "包内文件:",
         f"- {eml_path.name}: 已将图片改为 CID 内联的邮件草稿文件。",
         f"- {body_path.name}: 同步保存的 HTML，图片指向本包 images/ 下的压缩文件，便于浏览器预览或手动复制。",
         "- images/: 压缩后的图片文件，每张目标小于 1MB。",
+        f"- {RECIPIENT_SNAPSHOT_NAME}: 本次打包冻结的收件人快照；发送时只使用这一份名单。",
         "",
         "使用建议:",
         "1. 把整个文件夹复制到公司电脑。",
@@ -342,6 +350,17 @@ def write_readme(
         f"图片压缩上限: {max_bytes} bytes",
         f"图片数量: {len(images)}",
     ]
+    group = delivery.get("recipient_group")
+    if group:
+        lines.extend(
+            [
+                f"名单组: {group['name']} ({group['id']}, v{group['version']})",
+                f"名单指纹: {delivery['fingerprint']}",
+            ]
+        )
+    elif delivery.get("manual_recipient_count"):
+        lines.append("名单来源: 临时手工收件人")
+    to_addrs = formatted_addresses(delivery["recipients"])
     if to_addrs:
         lines.append("")
         lines.append("收件人:")
@@ -354,8 +373,13 @@ def write_readme(
     (package_dir / "README.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def write_manifest(package_dir: Path, images: list[InlineImage]) -> None:
+def write_manifest(package_dir: Path, images: list[InlineImage], delivery: dict) -> None:
     data = {
+        "recipient_delivery": {
+            "recipient_group": delivery.get("recipient_group"),
+            "recipient_count": delivery["recipient_count"],
+            "fingerprint": delivery["fingerprint"],
+        },
         "images": [
             {
                 "source": image.source,
@@ -410,8 +434,8 @@ def main() -> None:
         raise SystemExit("Package failed: --max-image-bytes must be positive.")
 
     try:
-        recipients = resolve_recipients(args.recipient_list, args.to, args.recipient_config)
-        to_addrs = formatted_addresses(recipients)
+        delivery = resolve_recipient_delivery(args.recipient_list, args.to, args.recipient_config)
+        to_addrs = formatted_addresses(delivery["recipients"])
     except RecipientError as exc:
         raise SystemExit(f"Package failed: {exc}") from exc
 
@@ -451,8 +475,10 @@ def main() -> None:
         )
         eml_path = package_dir / f"{slugify(subject, html_path.stem)}.eml"
         eml_path.write_bytes(msg.as_bytes())
-        write_readme(package_dir, html_path, eml_path, body_path, subject, to_addrs, images, args.max_image_bytes)
-        write_manifest(package_dir, images)
+        snapshot_path = package_dir / RECIPIENT_SNAPSHOT_NAME
+        write_recipient_snapshot(snapshot_path, delivery)
+        write_readme(package_dir, html_path, eml_path, body_path, subject, delivery, images, args.max_image_bytes)
+        write_manifest(package_dir, images, delivery)
     except Exception as exc:
         raise SystemExit(f"Package failed: {exc}") from exc
 
@@ -460,7 +486,11 @@ def main() -> None:
     print(f"EML: {eml_path}")
     print(f"HTML: {body_path}")
     print(f"Images: {len(images)}")
-    print(f"Recipients: {len(to_addrs)}")
+    print(f"Recipients: {delivery['recipient_count']}")
+    print(f"Recipient snapshot: {snapshot_path}")
+    if delivery["recipient_group"]:
+        group = delivery["recipient_group"]
+        print(f"Recipient group: {group['name']} ({group['id']} v{group['version']})")
 
 
 if __name__ == "__main__":

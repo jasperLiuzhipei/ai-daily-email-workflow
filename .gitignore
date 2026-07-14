@@ -1,6 +1,7 @@
 # Local mail configuration and credentials
 config/email_settings.json
 config/recipients.json
+config/recipients.*.backup.json
 config/editor_settings.json
 .env
 .env.*

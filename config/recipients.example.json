@@ -1,14 +1,31 @@
 {
-  "test": [
-    {
-      "name": "Daily Owner",
-      "email": "owner@example.com"
+  "schema_version": 1,
+  "groups": {
+    "test": {
+      "id": "ai-daily-test",
+      "name": "AI Daily Test",
+      "version": 1,
+      "enabled": true,
+      "members": [
+        {
+          "name": "Daily Owner",
+          "employee_id": "example-owner",
+          "email": "owner@example.com"
+        }
+      ]
+    },
+    "prod": {
+      "id": "ai-daily-prod",
+      "name": "AI Daily Production",
+      "version": 1,
+      "enabled": true,
+      "members": [
+        {
+          "name": "Example Recipient",
+          "employee_id": "example-recipient",
+          "email": "team@example.com"
+        }
+      ]
     }
-  ],
-  "prod": [
-    {
-      "name": "Example Recipient",
-      "email": "team@example.com"
-    }
-  ]
+  }
 }
