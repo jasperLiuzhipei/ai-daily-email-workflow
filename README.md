@@ -42,6 +42,9 @@ python3 -m pip install -r requirements.txt
 # 查看某期工作流文件是否齐全
 python3 scripts/run_ai_daily.py status --date YYYY-MM-DD
 
+# 创建或查看该期的运行状态单；已有本地文件会首次自动回填到状态单
+python3 scripts/run_ai_daily.py state --date YYYY-MM-DD
+
 # 仅检查测试/正式名单组的状态、版本、人数和指纹，不显示邮箱
 python3 scripts/run_ai_daily.py recipients
 
@@ -65,6 +68,8 @@ python3 scripts/run_ai_daily.py prod --date YYYY-MM-DD --skip-build --ask-passwo
 ```
 
 每次 HTML 构建完成后，脚本会打印对应日期的正式发送命令。
+
+每个期次还有一份 `daily_runs/YYYY-MM-DD/workflow_run.json`。它记录稳定的 `run_id`、阶段、文件 Hash、冻结名单快照元数据和发送结果，但不记录邮箱、密码或正文。正式邮件已成功发送的日期默认拒绝再次群发；只有确认需要补发时，才额外加 `--allow-resend-prod`。
 
 ## 收件人名单
 

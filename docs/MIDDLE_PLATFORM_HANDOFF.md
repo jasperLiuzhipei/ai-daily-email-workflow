@@ -16,11 +16,20 @@
 
 ## 运行状态
 
-建议给每期创建唯一 `run_id`，并保存以下状态：
+当前本地工作流已经为每期生成 `daily_runs/YYYY-MM-DD/workflow_run.json`，其中 `run_id` 固定为 `ai-daily-YYYY-MM-DD`。中台上线时可将同一份字段映射到任务表和对象存储，而不是重新设计一套流程。
 
-`DISCOVERED -> SELECTED -> CONTENT_READY -> IMAGE_APPROVED -> HTML_READY -> APPROVED_TO_SEND -> SENT | FAILED`
+阶段为：
 
-P0 的关键规则：`APPROVED_TO_SEND` 之前不能调用正式收件名单；同一 `run_id` 的正式发送必须幂等。
+`DISCOVERED -> SELECTED -> CONTENT_READY -> IMAGE_APPROVED -> HTML_READY -> PACKAGED -> TESTED -> APPROVED_TO_SEND -> SENT`
+
+失败不会覆盖最后一个成功阶段，而是作为 `outcome: FAILED` 和 `last_error` 记录，便于人工重跑。P0 的关键规则：`APPROVED_TO_SEND` 之前不能调用正式收件名单；同一 `run_id` 的正式发送必须幂等。当前脚本已默认拦截同日期重复正式发送，只有显式添加 `--allow-resend-prod` 才能补发。
+
+状态单的最小字段：
+
+- `run_id`、`run_date`、`phase`、`outcome` 和事件时间线。
+- `artifacts`：选源结果、内容 JSON、图片 manifest、HTML、EML 与名单快照的相对路径、大小、Hash。
+- `delivery`：测试/正式发送状态、名单组 ID/版本、人数和快照指纹，不保存邮箱明文。
+- `last_error`：经过邮箱脱敏的失败摘要。
 
 ## 需要中台提供的能力
 

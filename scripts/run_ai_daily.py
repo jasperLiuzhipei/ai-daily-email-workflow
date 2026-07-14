@@ -35,6 +35,15 @@ from email_recipients import (
 )
 from verify_research_image_lineage import LineageError, verify_lineage
 from image_provider_registry import ImageProviderError
+from workflow_run_state import (
+    WorkflowStateError,
+    ensure_workflow_state,
+    is_prod_sent,
+    load_workflow_state,
+    record_run_event,
+    record_run_failure,
+    summarize_workflow_state,
+)
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -59,6 +68,7 @@ class Paths:
     image_manifest: Path
     selection_diagnostic: Path
     selection_review: Path
+    workflow_state: Path
     html: Path
     package_test: Path
     package_prod: Path
@@ -86,6 +96,7 @@ def default_paths(run_date: str) -> Paths:
         image_manifest=run_dir / "research_image_manifest.json",
         selection_diagnostic=run_dir / "selection_diagnostic.json",
         selection_review=run_dir / "selection_review.json",
+        workflow_state=run_dir / "workflow_run.json",
         html=Path("output") / f"ai_daily_email_{run_date}.html",
         package_test=Path("email_packages") / run_date / "test",
         package_prod=Path("email_packages") / run_date / "prod",
@@ -144,6 +155,7 @@ def apply_overrides(paths: Paths, args: argparse.Namespace) -> Paths:
     paths.image_manifest = args.image_manifest or paths.image_manifest
     paths.selection_diagnostic = args.selection_diagnostic or paths.selection_diagnostic
     paths.selection_review = args.selection_review or paths.selection_review
+    paths.workflow_state = args.workflow_state or paths.workflow_state
     paths.html = args.html or paths.html
     paths.package_test = args.test_package_dir or paths.package_test
     paths.package_prod = args.prod_package_dir or paths.package_prod
@@ -164,6 +176,7 @@ def run_status(paths: Paths, args: argparse.Namespace) -> None:
         ("image_manifest", paths.image_manifest),
         ("selection_diagnostic", paths.selection_diagnostic),
         ("selection_review", paths.selection_review),
+        ("workflow_state", paths.workflow_state),
         ("html", paths.html),
         ("package_test", paths.package_test),
         ("package_prod", paths.package_prod),
@@ -171,6 +184,126 @@ def run_status(paths: Paths, args: argparse.Namespace) -> None:
     print(f"AI Daily status: {paths.run_date}")
     for label, path in checks:
         print(f"{label:22} {file_status(path):18} {path}")
+    state = load_workflow_state(paths.workflow_state)
+    if state:
+        print("\nWorkflow state")
+        for line in summarize_workflow_state(state):
+            print(line)
+
+
+def existing_run_artifacts(paths: Paths) -> dict[str, Path]:
+    candidates = {
+        "source_selection": paths.source_selection,
+        "content": paths.content,
+        "normalized_content": paths.normalized_content,
+        "research_brief": paths.brief_json,
+        "research_image_prompt": paths.prompt_file,
+        "research_image_manifest": paths.image_manifest,
+        "selection_diagnostic": paths.selection_diagnostic,
+        "selection_review": paths.selection_review,
+        "html": paths.html,
+        "test_package": paths.package_test,
+        "prod_package": paths.package_prod,
+    }
+    artifacts = {key: path for key, path in candidates.items() if path.exists()}
+    for recipient_list, package_dir in (("test", paths.package_test), ("prod", paths.package_prod)):
+        if not package_dir.exists():
+            continue
+        try:
+            eml = latest_eml(package_dir)
+        except WorkflowError:
+            continue
+        artifacts[f"{recipient_list}_eml"] = eml
+        snapshot = eml.parent / RECIPIENT_SNAPSHOT_NAME
+        if snapshot.exists():
+            artifacts[f"{recipient_list}_recipient_snapshot"] = snapshot
+    return artifacts
+
+
+def inferred_phase(paths: Paths, args: argparse.Namespace) -> str:
+    send_ledger = load_optional_json(args.send_ledger)
+    prod_sends = send_ledger.get("prod")
+    if isinstance(prod_sends, dict) and paths.run_date in prod_sends:
+        return "SENT"
+    if paths.package_test.exists() or paths.package_prod.exists():
+        return "PACKAGED"
+    if paths.html.exists():
+        return "HTML_READY"
+    if paths.image_manifest.exists():
+        return "IMAGE_APPROVED"
+    if paths.content.exists():
+        return "CONTENT_READY"
+    if paths.source_selection.exists():
+        return "SELECTED"
+    return "DISCOVERED"
+
+
+def run_state(paths: Paths, args: argparse.Namespace) -> None:
+    state = ensure_workflow_state(paths.workflow_state, paths.run_date)
+    artifacts = existing_run_artifacts(paths)
+    missing_artifacts = {key: path for key, path in artifacts.items() if key not in state["artifacts"]}
+    target_phase = inferred_phase(paths, args)
+    if missing_artifacts or (state["phase"] == "DISCOVERED" and target_phase != "DISCOVERED"):
+        delivery_channel = None
+        delivery = None
+        if target_phase == "SENT":
+            delivery_channel = "prod"
+            delivery = {"status": "sent", "backfilled_from": "send_ledger"}
+            snapshot = artifacts.get("prod_recipient_snapshot")
+            if snapshot:
+                delivery.update(snapshot_delivery_metadata(snapshot))
+        record_phase(
+            paths,
+            action="backfill_state",
+            phase=target_phase,
+            message="Existing local run artifacts backfilled into the workflow manifest.",
+            artifacts=missing_artifacts,
+            delivery_channel=delivery_channel,
+            delivery=delivery,
+        )
+        state = load_workflow_state(paths.workflow_state) or state
+    print(f"AI Daily workflow state: {paths.run_date}")
+    for line in summarize_workflow_state(state):
+        print(line)
+
+
+def record_phase(
+    paths: Paths,
+    *,
+    action: str,
+    phase: str | None = None,
+    message: str | None = None,
+    artifacts: dict[str, Path] | None = None,
+    delivery_channel: str | None = None,
+    delivery: dict[str, Any] | None = None,
+) -> None:
+    record_run_event(
+        paths.workflow_state,
+        paths.run_date,
+        action=action,
+        phase=phase,
+        message=message,
+        artifacts=artifacts,
+        delivery_channel=delivery_channel,
+        delivery=delivery,
+    )
+
+
+def snapshot_delivery_metadata(snapshot_path: Path) -> dict[str, Any]:
+    try:
+        delivery = load_recipient_snapshot(snapshot_path)
+    except RecipientError as exc:
+        raise WorkflowError(f"Missing valid recipient snapshot: {exc}") from exc
+    group = delivery.get("recipient_group") or {}
+    return {
+        "recipient_group": {
+            key: group[key]
+            for key in ("key", "id", "name", "version")
+            if key in group
+        },
+        "recipient_count": delivery["recipient_count"],
+        "recipient_fingerprint": delivery["fingerprint"],
+    }
 
 
 def run_recipients(args: argparse.Namespace) -> None:
@@ -234,6 +367,13 @@ def run_select(paths: Paths, args: argparse.Namespace) -> None:
     if args.bestblogs_max_items is not None:
         cmd.extend(["--bestblogs-max-items", str(args.bestblogs_max_items)])
     run_cmd(cmd, dry_label="select sources")
+    record_phase(
+        paths,
+        action="select",
+        phase="SELECTED",
+        message="Source selection completed.",
+        artifacts={"source_selection": paths.source_selection},
+    )
 
 
 def run_diagnose(paths: Paths, args: argparse.Namespace) -> None:
@@ -260,6 +400,18 @@ def run_diagnose(paths: Paths, args: argparse.Namespace) -> None:
     if args.overwrite_selection_review:
         cmd.append("--overwrite-review")
     run_cmd(cmd, dry_label="diagnose source selection")
+    record_phase(
+        paths,
+        action="diagnose",
+        phase="CONTENT_READY",
+        message="Final content and source-selection diagnostic recorded.",
+        artifacts={
+            "source_selection": paths.source_selection,
+            "content": paths.content,
+            "selection_diagnostic": paths.selection_diagnostic,
+            "selection_review": paths.selection_review,
+        },
+    )
 
 
 def run_replay(paths: Paths, args: argparse.Namespace) -> None:
@@ -332,6 +484,32 @@ def run_build(paths: Paths, args: argparse.Namespace, *, write_ledger: bool = Fa
         if not write_ledger:
             cmd.append("--no-write-ledger")
         run_cmd(cmd, dry_label="finalize image and build html")
+        record_phase(
+            paths,
+            action="content_ready",
+            phase="CONTENT_READY",
+            message="Editorial content normalized for HTML rendering.",
+            artifacts={
+                "content": paths.content,
+                "normalized_content": paths.normalized_content,
+                "research_brief": paths.brief_json,
+                "research_image_prompt": paths.prompt_file,
+            },
+        )
+        record_phase(
+            paths,
+            action="image_approved",
+            phase="IMAGE_APPROVED",
+            message="Research image manifest passed into the HTML build.",
+            artifacts={"research_image_manifest": paths.image_manifest},
+        )
+        record_phase(
+            paths,
+            action="build_html",
+            phase="HTML_READY",
+            message="HTML rendering completed.",
+            artifacts={"html": paths.html},
+        )
         return
 
     if not paths.image_manifest.exists():
@@ -373,6 +551,27 @@ def run_build(paths: Paths, args: argparse.Namespace, *, write_ledger: bool = Fa
     if args.image_provider_registry:
         cmd.extend(["--image-provider-registry", str(args.image_provider_registry)])
     run_cmd(cmd, dry_label="build html")
+    record_phase(
+        paths,
+        action="content_ready",
+        phase="CONTENT_READY",
+        message="Editorial content normalized for HTML rendering.",
+        artifacts={"content": paths.content, "normalized_content": paths.normalized_content},
+    )
+    record_phase(
+        paths,
+        action="image_approved",
+        phase="IMAGE_APPROVED",
+        message="Research image manifest passed into the HTML build.",
+        artifacts={"research_image_manifest": paths.image_manifest},
+    )
+    record_phase(
+        paths,
+        action="build_html",
+        phase="HTML_READY",
+        message="HTML rendering completed.",
+        artifacts={"html": paths.html},
+    )
 
 
 def run_package(paths: Paths, recipient_list: str, package_dir: Path, args: argparse.Namespace) -> Path:
@@ -398,7 +597,26 @@ def run_package(paths: Paths, recipient_list: str, package_dir: Path, args: argp
     if from_addr:
         cmd.extend(["--from-addr", str(from_addr)])
     run_cmd(cmd, dry_label=f"package {recipient_list}")
-    return latest_eml(package_dir)
+    eml = latest_eml(package_dir)
+    snapshot_path = eml.parent / RECIPIENT_SNAPSHOT_NAME
+    delivery = {
+        "status": "packaged",
+        **snapshot_delivery_metadata(snapshot_path),
+    }
+    record_phase(
+        paths,
+        action=f"package_{recipient_list}",
+        phase="PACKAGED",
+        message=f"{recipient_list} email package created with frozen recipient snapshot.",
+        artifacts={
+            f"{recipient_list}_package": package_dir,
+            f"{recipient_list}_eml": eml,
+            f"{recipient_list}_recipient_snapshot": snapshot_path,
+        },
+        delivery_channel=recipient_list,
+        delivery=delivery,
+    )
+    return eml
 
 
 def smtp_args(args: argparse.Namespace) -> list[str]:
@@ -431,7 +649,7 @@ def smtp_args(args: argparse.Namespace) -> list[str]:
     return cmd
 
 
-def run_send(eml: Path, recipient_list: str, args: argparse.Namespace) -> None:
+def run_send(paths: Paths, eml: Path, recipient_list: str, args: argparse.Namespace) -> None:
     cmd = [
         sys.executable,
         script("send_email_package_smtp.py"),
@@ -444,13 +662,29 @@ def run_send(eml: Path, recipient_list: str, args: argparse.Namespace) -> None:
     if snapshot_path.exists():
         cmd.extend(["--recipient-snapshot", str(snapshot_path)])
     run_cmd(cmd, dry_label=f"send {recipient_list}")
+    delivery = {
+        "status": "sent" if args.send else "dry_run",
+        **snapshot_delivery_metadata(snapshot_path),
+    }
+    phase = None
+    if args.send:
+        phase = "TESTED" if recipient_list == "test" else "SENT"
+    record_phase(
+        paths,
+        action=f"smtp_{recipient_list}",
+        phase=phase,
+        message=("SMTP send completed." if args.send else "SMTP dry-run completed."),
+        artifacts={f"{recipient_list}_eml": eml, f"{recipient_list}_recipient_snapshot": snapshot_path},
+        delivery_channel=recipient_list,
+        delivery=delivery,
+    )
 
 
 def run_test(paths: Paths, args: argparse.Namespace) -> None:
     if not args.skip_build:
         run_build(paths, args, write_ledger=False)
     eml = run_package(paths, "test", paths.package_test, args)
-    run_send(eml, "test", args)
+    run_send(paths, eml, "test", args)
 
 
 def commit_issue_ledger(paths: Paths, args: argparse.Namespace) -> int:
@@ -494,11 +728,22 @@ def commit_send_ledger(paths: Paths, args: argparse.Namespace, eml: Path, issue:
     print(f"Committed prod send record for {paths.run_date}: {args.send_ledger}")
 
 
+def has_existing_prod_send(paths: Paths, args: argparse.Namespace) -> bool:
+    if is_prod_sent(load_workflow_state(paths.workflow_state)):
+        return True
+    ledger = load_optional_json(args.send_ledger)
+    return isinstance(ledger.get("prod"), dict) and paths.run_date in ledger["prod"]
+
+
 def run_prod(paths: Paths, args: argparse.Namespace) -> None:
     if args.send and not args.confirm_prod:
         raise WorkflowError("Refusing prod send without --confirm-prod.")
     if args.send and args.allow_candidate_image_provider:
         raise WorkflowError("Candidate image providers are comparison-only and cannot be sent with prod --send.")
+    if args.send and not args.allow_resend_prod and has_existing_prod_send(paths, args):
+        raise WorkflowError(
+            f"Refusing duplicate prod send for {paths.run_date}. Use --allow-resend-prod only for an intentional resend."
+        )
     if not args.skip_build:
         run_build(paths, args, write_ledger=False)
     if args.send:
@@ -515,7 +760,17 @@ def run_prod(paths: Paths, args: argparse.Namespace) -> None:
         except (OSError, json.JSONDecodeError, ImageProviderError, LineageError) as exc:
             raise WorkflowError(f"Refusing prod send: research image quality gate failed: {exc}") from exc
     eml = run_package(paths, "prod", paths.package_prod, args)
-    run_send(eml, "prod", args)
+    if args.send:
+        record_phase(
+            paths,
+            action="approve_prod_send",
+            phase="APPROVED_TO_SEND",
+            message="Prod send explicitly approved by --confirm-prod.",
+            artifacts={"prod_eml": eml, "prod_recipient_snapshot": eml.parent / RECIPIENT_SNAPSHOT_NAME},
+            delivery_channel="prod",
+            delivery={"status": "approved", **snapshot_delivery_metadata(eml.parent / RECIPIENT_SNAPSHOT_NAME)},
+        )
+    run_send(paths, eml, "prod", args)
     if args.send:
         issue = commit_issue_ledger(paths, args)
         commit_send_ledger(paths, args, eml, issue)
@@ -527,6 +782,7 @@ def parse_args() -> argparse.Namespace:
         "action",
         choices=[
             "status",
+            "state",
             "recipients",
             "select",
             "diagnose",
@@ -538,7 +794,7 @@ def parse_args() -> argparse.Namespace:
             "prod",
         ],
         help=(
-            "status: show paths; recipients: inspect recipient group metadata; "
+            "status: show paths; state: show/create run manifest; recipients: inspect recipient group metadata; "
             "select: AIHot + BestBlogs source selection; diagnose: compare selection to final content; "
             "replay: compile reviewed diagnostics; build: render HTML; "
             "package-test/prod: create .eml only; test/prod: package and SMTP dry-run/send."
@@ -588,6 +844,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-selection", type=Path, help="Override source selection output path.")
     parser.add_argument("--selection-diagnostic", type=Path, help="Override selection diagnostics JSON path.")
     parser.add_argument("--selection-review", type=Path, help="Override editor selection review JSON path.")
+    parser.add_argument("--workflow-state", type=Path, help="Override per-run workflow state manifest path.")
     parser.add_argument("--overwrite-selection-review", action="store_true")
     parser.add_argument("--runs-root", type=Path, default=Path("daily_runs"), help="Selection replay input root.")
     parser.add_argument(
@@ -653,6 +910,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ask-password", action="store_true")
     parser.add_argument("--send", action="store_true", help="Actually send email. Default is SMTP dry-run.")
     parser.add_argument("--confirm-prod", action="store_true", help="Required with prod --send.")
+    parser.add_argument(
+        "--allow-resend-prod",
+        action="store_true",
+        help="Allow an intentional duplicate prod send for the same date after explicit review.",
+    )
     return parser.parse_args()
 
 
@@ -669,25 +931,39 @@ def main() -> None:
     try:
         if args.action == "status":
             run_status(paths, args)
+        elif args.action == "state":
+            run_state(paths, args)
         elif args.action == "recipients":
             run_recipients(args)
         elif args.action == "select":
+            ensure_workflow_state(paths.workflow_state, paths.run_date)
             run_select(paths, args)
         elif args.action == "diagnose":
+            ensure_workflow_state(paths.workflow_state, paths.run_date)
             run_diagnose(paths, args)
         elif args.action == "replay":
             run_replay(paths, args)
         elif args.action == "build":
+            ensure_workflow_state(paths.workflow_state, paths.run_date)
             run_build(paths, args, write_ledger=False)
         elif args.action == "package-test":
+            ensure_workflow_state(paths.workflow_state, paths.run_date)
             run_package(paths, "test", paths.package_test, args)
         elif args.action == "package-prod":
+            ensure_workflow_state(paths.workflow_state, paths.run_date)
             run_package(paths, "prod", paths.package_prod, args)
         elif args.action == "test":
+            ensure_workflow_state(paths.workflow_state, paths.run_date)
             run_test(paths, args)
         elif args.action == "prod":
+            ensure_workflow_state(paths.workflow_state, paths.run_date)
             run_prod(paths, args)
-    except (OSError, subprocess.CalledProcessError, WorkflowError) as exc:
+    except (OSError, subprocess.CalledProcessError, WorkflowError, WorkflowStateError) as exc:
+        if args.action not in {"status", "recipients", "replay"}:
+            try:
+                record_run_failure(paths.workflow_state, paths.run_date, action=args.action, error=exc)
+            except (OSError, WorkflowStateError):
+                pass
         raise SystemExit(f"Workflow failed: {exc}") from exc
 
 
