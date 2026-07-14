@@ -1,0 +1,14 @@
+{
+  "test": [
+    {
+      "name": "Daily Owner",
+      "email": "owner@example.com"
+    }
+  ],
+  "prod": [
+    {
+      "name": "Example Recipient",
+      "email": "team@example.com"
+    }
+  ]
+}

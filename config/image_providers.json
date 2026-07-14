@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "default_provider": "codex_imagegen",
+    "baseline_provider": "codex_imagegen",
+    "candidate_mode": "manual_ab_review_required",
+    "production_rule": "Only the baseline provider or an explicitly production-approved provider with an approved per-image quality gate may enter a production email."
+  },
+  "providers": {
+    "codex_imagegen": {
+      "aliases": ["imagegen", "codex"],
+      "execution": "codex_builtin",
+      "model": "image_gen",
+      "enabled": true,
+      "baseline": true,
+      "production_allowed": true,
+      "requires_prompt": true,
+      "requires_codex_output_root": true,
+      "requires_manual_comparison": false
+    },
+    "gpt_image_2": {
+      "aliases": ["gpt-image-2", "image2"],
+      "execution": "openai_images_api",
+      "model": "gpt-image-2",
+      "enabled": true,
+      "baseline": false,
+      "production_allowed": false,
+      "requires_prompt": true,
+      "requires_codex_output_root": false,
+      "requires_manual_comparison": true,
+      "api_key_env": "OPENAI_API_KEY",
+      "base_url_env": "OPENAI_BASE_URL"
+    },
+    "manual_provided": {
+      "aliases": ["provided", "manual"],
+      "execution": "manual",
+      "model": null,
+      "enabled": true,
+      "baseline": false,
+      "production_allowed": false,
+      "requires_prompt": false,
+      "requires_codex_output_root": false,
+      "requires_manual_comparison": true
+    }
+  }
+}

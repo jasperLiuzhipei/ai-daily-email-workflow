@@ -1,0 +1,26 @@
+# Local mail configuration and credentials
+config/email_settings.json
+config/recipients.json
+config/editor_settings.json
+.env
+.env.*
+!.env.example
+
+# Python and editor artefacts
+__pycache__/
+*.py[cod]
+.DS_Store
+.pytest_cache/
+
+# Optional local runtime directories when this repository is used as the job root
+daily_runs/
+assets/
+output/
+email_packages/
+
+# Local API image candidates and temporary exports
+*.eml
+*.log
+
+# Historical local planning notes; the current deployment contract lives in docs/.
+docs/ai_daily_completion_priority.md

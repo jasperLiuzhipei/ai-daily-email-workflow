@@ -1,0 +1,167 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": "aihot_main",
+      "name": "AIHot main feed",
+      "url": "https://aihot.virxact.com/feed.xml",
+      "enabled": true,
+      "integration": "core",
+      "transport": "rss",
+      "pool": "news",
+      "authority": "aggregator",
+      "role": "Primary discovery and Chinese AI news recall"
+    },
+    {
+      "id": "aihot_paper",
+      "name": "AIHot paper feed",
+      "url": "https://aihot.virxact.com/feed/category/paper.xml",
+      "enabled": true,
+      "integration": "core",
+      "transport": "rss",
+      "pool": "research",
+      "authority": "aggregator",
+      "role": "Research recall with a 72-96 hour lookback"
+    },
+    {
+      "id": "aihot_all",
+      "name": "AIHot all feed",
+      "url": "https://aihot.virxact.com/feed/all.xml",
+      "enabled": true,
+      "integration": "core",
+      "transport": "rss",
+      "pool": "news",
+      "authority": "aggregator",
+      "role": "Supplemental recall for fresh workflow, skill, and engineering signals; always deduplicated and scored"
+    },
+    {
+      "id": "aihot_daily",
+      "name": "AIHot Daily",
+      "url": "https://aihot.virxact.com/daily",
+      "enabled": true,
+      "integration": "daily_editorial",
+      "transport": "html",
+      "pool": "news",
+      "authority": "aggregator_editorial",
+      "role": "Editorial prefilter and modest ranking signal; never replaces primary-source resolution, freshness checks, or content-level deduplication"
+    },
+    {
+      "id": "bestblogs_ai",
+      "name": "BestBlogs high-score AI feed",
+      "url": "https://www.bestblogs.dev/en/feeds/rss?category=ai&minScore=90",
+      "enabled": true,
+      "integration": "core",
+      "transport": "rss",
+      "pool": "news",
+      "authority": "aggregator",
+      "role": "English engineering, prompt, skill, and workflow recall"
+    },
+    {
+      "id": "anthropic_research",
+      "name": "Anthropic Research",
+      "url": "https://www.anthropic.com/research",
+      "enabled": true,
+      "integration": "official_direct",
+      "transport": "html",
+      "parser": "anthropic_listing",
+      "pool": "research",
+      "authority": "official_research",
+      "path_prefixes": ["/research/"],
+      "exclude_prefixes": ["/research/team/"],
+      "source_type_override": "paper",
+      "role": "First-party research, evaluations, safety, and capability boundaries"
+    },
+    {
+      "id": "anthropic_news",
+      "name": "Anthropic News",
+      "url": "https://www.anthropic.com/news",
+      "enabled": true,
+      "integration": "official_direct",
+      "transport": "html",
+      "parser": "anthropic_listing",
+      "pool": "news",
+      "authority": "official_news",
+      "path_prefixes": ["/news/", "/features/"],
+      "exclude_prefixes": [],
+      "role": "First-party Claude product, company, safety, and engineering updates"
+    },
+    {
+      "id": "google_deepmind_news",
+      "name": "Google DeepMind News",
+      "url": "https://deepmind.google/blog/rss.xml",
+      "enabled": true,
+      "integration": "official_direct",
+      "transport": "rss",
+      "pool": "news",
+      "authority": "official_news",
+      "role": "First-party Gemini, model, agent, science, and safety updates"
+    },
+    {
+      "id": "microsoft_research",
+      "name": "Microsoft Research",
+      "url": "https://www.microsoft.com/en-us/research/feed/",
+      "enabled": true,
+      "integration": "official_direct",
+      "transport": "rss",
+      "pool": "research",
+      "authority": "official_research",
+      "source_type_override": "report",
+      "role": "First-party agent, evaluation, productivity, and applied AI research"
+    },
+    {
+      "id": "arxiv",
+      "name": "arXiv",
+      "url": "https://arxiv.org/",
+      "enabled": true,
+      "integration": "primary_resolution",
+      "transport": "link_resolution",
+      "pool": "research",
+      "authority": "paper_repository",
+      "role": "Primary paper link resolved from the AIHot paper feed; not queried broadly"
+    },
+    {
+      "id": "openai_newsroom",
+      "name": "OpenAI Newsroom",
+      "url": "https://openai.com/news/",
+      "enabled": true,
+      "integration": "aggregator_primary_resolution",
+      "transport": "indirect",
+      "pool": "mixed",
+      "authority": "official_first_party",
+      "role": "Covered through AIHot and BestBlogs with the final link resolved to OpenAI"
+    },
+    {
+      "id": "google_research",
+      "name": "Google Research Blog",
+      "url": "https://research.google/blog/",
+      "enabled": true,
+      "integration": "aggregator_primary_resolution",
+      "transport": "indirect",
+      "pool": "research",
+      "authority": "official_research",
+      "role": "Covered through AIHot and BestBlogs until a stable direct feed is available"
+    },
+    {
+      "id": "huggingface_blog",
+      "name": "Hugging Face Blog",
+      "url": "https://huggingface.co/blog",
+      "enabled": true,
+      "integration": "aggregator_primary_resolution",
+      "transport": "indirect",
+      "pool": "mixed",
+      "authority": "official_and_community",
+      "role": "Engineering and open-source recall through BestBlogs; community posts require extra filtering"
+    },
+    {
+      "id": "meta_ai_blog",
+      "name": "Meta AI Blog",
+      "url": "https://ai.meta.com/blog/",
+      "enabled": true,
+      "integration": "aggregator_primary_resolution",
+      "transport": "indirect",
+      "pool": "mixed",
+      "authority": "official_first_party",
+      "role": "Covered through AIHot and BestBlogs until a stable direct feed is available"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "from_addr": "ai-daily@example.com",
+  "smtp": {
+    "host": "smtp.example.com",
+    "port": 465,
+    "security": "ssl",
+    "user": "ai-daily@example.com"
+  }
+}

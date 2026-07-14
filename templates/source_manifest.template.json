@@ -1,0 +1,18 @@
+{
+  "date": "YYYY-MM-DD",
+  "theme": "clay_orange",
+  "research_source": {
+    "title": "",
+    "url": "",
+    "aihot_url": "",
+    "image_source": ""
+  },
+  "news_sources": [
+    {
+      "title": "",
+      "url": "",
+      "aihot_url": ""
+    }
+  ],
+  "notes": ""
+}
