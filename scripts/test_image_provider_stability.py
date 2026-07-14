@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import socket
 import statistics
 import subprocess
 import sys
@@ -18,8 +20,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from ai_daily_common import file_sha256, write_json_object
+from image_provider_registry import ImageProviderError, load_provider_registry, resolve_provider
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -83,6 +87,81 @@ def build_contact_sheet(images: list[tuple[str, Path]], output: Path) -> Path | 
 
 def safe_tail(value: str, limit: int = 800) -> str:
     return value.replace("\n", " ").strip()[-limit:]
+
+
+def gateway_preflight(args: argparse.Namespace) -> dict[str, Any]:
+    """Fail early when the configured API gateway is not reachable here."""
+
+    if args.dry_run:
+        return {"status": "skipped", "reason": "dry_run"}
+    if args.skip_gateway_preflight:
+        return {"status": "skipped", "reason": "explicitly_skipped"}
+
+    try:
+        registry = load_provider_registry(args.provider_registry)
+        _, provider = resolve_provider(args.provider, registry)
+    except ImageProviderError as exc:
+        return {"status": "failed", "stage": "provider_config", "error": str(exc)}
+
+    base_url_env = str(provider.get("base_url_env") or "OPENAI_BASE_URL")
+    base_url = os.environ.get(base_url_env)
+    if not base_url:
+        return {"status": "skipped", "reason": f"{base_url_env}_not_set"}
+
+    parsed = urlparse(base_url)
+    if not parsed.hostname:
+        return {
+            "status": "failed",
+            "stage": "base_url",
+            "error": f"{base_url_env} does not contain a valid hostname.",
+        }
+
+    host = parsed.hostname
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    result: dict[str, Any] = {"host": host, "port": port, "scheme": parsed.scheme or "http"}
+    try:
+        addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        return {"status": "failed", "stage": "dns", "error": str(exc), **result}
+
+    family, sock_type, protocol, _, sockaddr = addresses[0]
+    try:
+        with socket.socket(family, sock_type, protocol) as connection:
+            connection.settimeout(args.gateway_preflight_timeout_seconds)
+            connection.connect(sockaddr)
+    except OSError as exc:
+        return {"status": "failed", "stage": "tcp", "error": str(exc), **result}
+    return {"status": "passed", **result}
+
+
+def blocked_report(args: argparse.Namespace, preflight: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": 2,
+        "created_at": utc_now_iso(),
+        "provider": args.provider,
+        "prompt_file": str(args.prompt_file),
+        "prompt_sha256": file_sha256(args.prompt_file),
+        "request": {
+            "attempts": args.attempts,
+            "size": args.size,
+            "quality": args.quality,
+            "timeout_seconds": args.timeout_seconds,
+            "max_retries": args.max_retries,
+            "dry_run": args.dry_run,
+        },
+        "gateway_preflight": preflight,
+        "summary": {
+            "success_count": 0,
+            "failure_count": 0,
+            "success_rate": 0.0,
+            "latency_ms": {"min": None, "median": None, "p95": None, "max": None},
+            "transport_gate": "blocked",
+        },
+        "baseline_image": str(args.baseline_image) if args.baseline_image else None,
+        "contact_sheet": None,
+        "attempts": [],
+        "manual_review": manual_review_template(),
+    }
 
 
 def run_attempt(args: argparse.Namespace, index: int, out_dir: Path) -> dict[str, Any]:
@@ -174,6 +253,17 @@ def main() -> None:
     parser.add_argument("--quality", default="high")
     parser.add_argument("--timeout-seconds", type=int, default=120)
     parser.add_argument("--max-retries", type=int, default=1)
+    parser.add_argument(
+        "--gateway-preflight-timeout-seconds",
+        type=int,
+        default=3,
+        help="DNS/TCP reachability timeout before issuing image requests.",
+    )
+    parser.add_argument(
+        "--skip-gateway-preflight",
+        action="store_true",
+        help="Bypass the API gateway DNS/TCP check when the runtime handles service discovery separately.",
+    )
     parser.add_argument("--baseline-image", type=Path, help="Optional native baseline image to include in the contact sheet.")
     parser.add_argument("--force", action="store_true", help="Overwrite existing candidate files in --out-dir.")
     parser.add_argument("--dry-run", action="store_true", help="Validate the provider command without calling the API.")
@@ -182,7 +272,7 @@ def main() -> None:
 
     if args.attempts < 1:
         raise SystemExit("Stability test failed: --attempts must be at least 1.")
-    if args.timeout_seconds <= 0 or args.max_retries < 0:
+    if args.timeout_seconds <= 0 or args.max_retries < 0 or args.gateway_preflight_timeout_seconds <= 0:
         raise SystemExit("Stability test failed: invalid timeout or retry setting.")
     if not args.prompt_file.exists():
         raise SystemExit(f"Stability test failed: missing prompt file: {args.prompt_file}")
@@ -190,6 +280,20 @@ def main() -> None:
         raise SystemExit(f"Stability test failed: missing baseline image: {args.baseline_image}")
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
+    preflight = gateway_preflight(args)
+    if preflight["status"] == "failed":
+        report = blocked_report(args, preflight)
+        report_path = args.out_dir / "stability_report.json"
+        write_json_object(report_path, report)
+        print(f"Stability report: {report_path}")
+        print(
+            "Gateway preflight blocked image requests: "
+            f"{preflight.get('stage', 'unknown')} - {preflight.get('error', 'unknown error')}"
+        )
+        if not args.allow_failures:
+            raise SystemExit("Stability test blocked: configured image gateway is not reachable. See stability_report.json.")
+        return
+
     attempts = [run_attempt(args, index, args.out_dir) for index in range(1, args.attempts + 1)]
     successful = [item for item in attempts if item["status"] == "success"]
     latencies = [float(item["elapsed_ms"]) for item in successful]
@@ -203,7 +307,7 @@ def main() -> None:
     contact_sheet = build_contact_sheet(contact_sheet_inputs, args.out_dir / "contact_sheet.jpg")
 
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": utc_now_iso(),
         "provider": args.provider,
         "prompt_file": str(args.prompt_file),
@@ -216,6 +320,7 @@ def main() -> None:
             "max_retries": args.max_retries,
             "dry_run": args.dry_run,
         },
+        "gateway_preflight": preflight,
         "summary": {
             "success_count": len(successful),
             "failure_count": sum(1 for item in attempts if item["status"] == "failed"),

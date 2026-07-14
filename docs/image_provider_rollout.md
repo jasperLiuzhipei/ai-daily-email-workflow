@@ -76,6 +76,8 @@ python3 ai_daily_workflow/scripts/test_image_provider_stability.py \
 
 Round-one transport gate: all three requests return a valid image and generation manifest, without a timeout, schema mismatch or malformed payload. The report also records request latency, output dimensions, image hashes and returned usage metadata when the gateway provides it.
 
+Before the three requests, the test performs a DNS and TCP preflight for `OPENAI_BASE_URL`. If the gateway hostname cannot be resolved or reached from the current machine, it writes a blocked report without issuing image-generation requests. Ask the platform owner for a desktop/VPN-reachable gateway address, or run the same command in the intended internal runtime; do not change the prompt or lower quality to work around a network failure.
+
 Then complete the five pending manual checks in the report: mechanism accuracy, Chinese text readability, evidence integrity, palette independence and email-scale readability. A provider should remain a candidate until it is at least equal to the Codex ImageGen baseline across several different research subjects; the test is evidence for that decision, not an automatic promotion.
 
 ## Company Image2 Not OpenAI-Compatible
