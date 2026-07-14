@@ -100,6 +100,7 @@ python3 scripts/migrate_recipient_registry.py --write
 
 - `codex_imagegen`：当前效果基线，仅适用于 Codex 本地工作流。
 - `gpt_image_2` / `image2`：API 候选 Provider，适合未来中台接入；必须经过 A/B 与单图质量审核，默认不能正式群发。
+- Image2 的稳定性测试使用同一份研究图 Prompt 连续生成三次，输出候选图、拼图和 `stability_report.json`；它不改 HTML、不写正式图片资产、更不会发送邮件。
 
 详见 [Image Provider Rollout](docs/image_provider_rollout.md)。
 

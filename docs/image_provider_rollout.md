@@ -46,6 +46,38 @@ python3 ai_daily_workflow/scripts/finalize_ai_daily_workflow.py \
 
 Use the candidate result only for comparison until the provider configuration is intentionally approved. `pending` is therefore useful for visual testing, but cannot be sent through the production path.
 
+## Stability Test Before A/B
+
+Do not replace the baseline after one successful image. First test the exact same Visual Handoff three times through the company gateway. The test writes raw candidates, per-request manifests, a contact sheet and `stability_report.json`; it does not stage an asset, rebuild HTML or send an email.
+
+Put the secret only in the ignored local `.env` file:
+
+```bash
+OPENAI_API_KEY=
+OPENAI_BASE_URL=http://iwc-aime-model:9219/litellm/v1
+```
+
+Load it into the current shell, then run the test. The optional baseline path makes the contact sheet suitable for an immediate visual A/B.
+
+```bash
+set -a
+source ai_daily_workflow/.env
+set +a
+
+python3 ai_daily_workflow/scripts/test_image_provider_stability.py \
+  --provider image2 \
+  --prompt-file daily_runs/YYYY-MM-DD/research_image_prompt.txt \
+  --out-dir daily_runs/YYYY-MM-DD/image2_stability \
+  --baseline-image assets/email/YYYY-MM-DD/your-native-baseline.jpg \
+  --attempts 3 \
+  --size 1024x1024 \
+  --quality high
+```
+
+Round-one transport gate: all three requests return a valid image and generation manifest, without a timeout, schema mismatch or malformed payload. The report also records request latency, output dimensions, image hashes and returned usage metadata when the gateway provides it.
+
+Then complete the five pending manual checks in the report: mechanism accuracy, Chinese text readability, evidence integrity, palette independence and email-scale readability. A provider should remain a candidate until it is at least equal to the Codex ImageGen baseline across several different research subjects; the test is evidence for that decision, not an automatic promotion.
+
 ## Company Image2 Not OpenAI-Compatible
 
 Do not force it through this adapter. Add a provider entry with a distinct `execution` value, then implement a small adapter in `generate_research_image.py` that records the same prompt hash, output hash, request metadata, and provider id. The staging and quality gate can remain unchanged.
