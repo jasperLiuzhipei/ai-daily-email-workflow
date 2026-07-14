@@ -48,6 +48,12 @@ python3 scripts/run_ai_daily.py recipients
 # 自动选源：新闻至少 5 条、不设上限；输出会显示预估阅读时长
 python3 scripts/run_ai_daily.py select --date YYYY-MM-DD
 
+# 内容定稿后，诊断自动选源与最终发布之间的差异，并生成编辑复盘模板
+python3 scripts/run_ai_daily.py diagnose --date YYYY-MM-DD
+
+# 仅将“已完成编辑复盘”的期次汇总为评分回放集
+python3 scripts/run_ai_daily.py replay
+
 # 在内容 JSON 与研究图审核完成后，构建 HTML
 python3 scripts/run_ai_daily.py build --date YYYY-MM-DD --theme digest_navy --news-layout paper
 
@@ -73,6 +79,17 @@ python3 scripts/migrate_recipient_registry.py --write
 ```
 
 字段和未来数据库映射见 [收件人名单说明](docs/RECIPIENT_REGISTRY.md)。
+
+## 选源质量诊断
+
+每期定稿后运行 `diagnose`。它会生成：
+
+- `selection_diagnostic.json`：自动选择、最终发布、未选池补入、手工未入池来源、自动选中但未发布、重复守卫被覆盖等差异。
+- `selection_review.json`：编辑复盘模板。只需记录真正的漏选、高价值补入、误判重复和评分原因。
+
+编辑将 `review_status` 改为 `completed` 后，运行 `replay` 才会把该期进入 `selection_replay.jsonl`。这份回放集用于调整评分和 Prompt，不直接自动改规则。
+
+详见 [选源质量说明](docs/SELECTION_QUALITY.md)。
 
 ## 图像 Provider
 

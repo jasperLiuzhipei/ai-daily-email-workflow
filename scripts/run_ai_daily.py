@@ -57,6 +57,8 @@ class Paths:
     prompt_file: Path
     imagegen_start_marker: Path
     image_manifest: Path
+    selection_diagnostic: Path
+    selection_review: Path
     html: Path
     package_test: Path
     package_prod: Path
@@ -82,6 +84,8 @@ def default_paths(run_date: str) -> Paths:
         prompt_file=run_dir / "research_image_prompt.txt",
         imagegen_start_marker=run_dir / "imagegen_start.marker",
         image_manifest=run_dir / "research_image_manifest.json",
+        selection_diagnostic=run_dir / "selection_diagnostic.json",
+        selection_review=run_dir / "selection_review.json",
         html=Path("output") / f"ai_daily_email_{run_date}.html",
         package_test=Path("email_packages") / run_date / "test",
         package_prod=Path("email_packages") / run_date / "prod",
@@ -138,6 +142,8 @@ def apply_overrides(paths: Paths, args: argparse.Namespace) -> Paths:
     paths.brief_json = args.brief_json or paths.brief_json
     paths.prompt_file = args.prompt_file or paths.prompt_file
     paths.image_manifest = args.image_manifest or paths.image_manifest
+    paths.selection_diagnostic = args.selection_diagnostic or paths.selection_diagnostic
+    paths.selection_review = args.selection_review or paths.selection_review
     paths.html = args.html or paths.html
     paths.package_test = args.test_package_dir or paths.package_test
     paths.package_prod = args.prod_package_dir or paths.package_prod
@@ -156,6 +162,8 @@ def run_status(paths: Paths, args: argparse.Namespace) -> None:
         ("prompt_file", paths.prompt_file),
         ("imagegen_start_marker", paths.imagegen_start_marker),
         ("image_manifest", paths.image_manifest),
+        ("selection_diagnostic", paths.selection_diagnostic),
+        ("selection_review", paths.selection_review),
         ("html", paths.html),
         ("package_test", paths.package_test),
         ("package_prod", paths.package_prod),
@@ -226,6 +234,46 @@ def run_select(paths: Paths, args: argparse.Namespace) -> None:
     if args.bestblogs_max_items is not None:
         cmd.extend(["--bestblogs-max-items", str(args.bestblogs_max_items)])
     run_cmd(cmd, dry_label="select sources")
+
+
+def run_diagnose(paths: Paths, args: argparse.Namespace) -> None:
+    if not paths.source_selection.exists():
+        raise WorkflowError(
+            f"Missing source selection: {paths.source_selection}. Run select first or pass --source-selection."
+        )
+    if not paths.content.exists():
+        raise WorkflowError(f"Missing final content JSON: {paths.content}.")
+    cmd = [
+        sys.executable,
+        script("selection_diagnostics.py"),
+        "--date",
+        paths.run_date,
+        "--selection",
+        str(paths.source_selection),
+        "--content",
+        str(paths.content),
+        "--output",
+        str(paths.selection_diagnostic),
+        "--review",
+        str(paths.selection_review),
+    ]
+    if args.overwrite_selection_review:
+        cmd.append("--overwrite-review")
+    run_cmd(cmd, dry_label="diagnose source selection")
+
+
+def run_replay(paths: Paths, args: argparse.Namespace) -> None:
+    cmd = [
+        sys.executable,
+        script("build_selection_replay.py"),
+        "--runs-root",
+        str(args.runs_root),
+        "--output",
+        str(args.replay_output),
+    ]
+    if args.include_pending_reviews:
+        cmd.append("--include-pending")
+    run_cmd(cmd, dry_label="build selection replay")
 
 
 def run_build(paths: Paths, args: argparse.Namespace, *, write_ledger: bool = False) -> None:
@@ -477,10 +525,22 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run AI daily deterministic workflow steps.")
     parser.add_argument(
         "action",
-        choices=["status", "recipients", "select", "build", "package-test", "package-prod", "test", "prod"],
+        choices=[
+            "status",
+            "recipients",
+            "select",
+            "diagnose",
+            "replay",
+            "build",
+            "package-test",
+            "package-prod",
+            "test",
+            "prod",
+        ],
         help=(
             "status: show paths; recipients: inspect recipient group metadata; "
-            "select: AIHot + BestBlogs source selection; build: render HTML; "
+            "select: AIHot + BestBlogs source selection; diagnose: compare selection to final content; "
+            "replay: compile reviewed diagnostics; build: render HTML; "
             "package-test/prod: create .eml only; test/prod: package and SMTP dry-run/send."
         ),
     )
@@ -526,6 +586,17 @@ def parse_args() -> argparse.Namespace:
         help="Maximum in-window BestBlogs items to resolve to primary sources.",
     )
     parser.add_argument("--source-selection", type=Path, help="Override source selection output path.")
+    parser.add_argument("--selection-diagnostic", type=Path, help="Override selection diagnostics JSON path.")
+    parser.add_argument("--selection-review", type=Path, help="Override editor selection review JSON path.")
+    parser.add_argument("--overwrite-selection-review", action="store_true")
+    parser.add_argument("--runs-root", type=Path, default=Path("daily_runs"), help="Selection replay input root.")
+    parser.add_argument(
+        "--replay-output",
+        type=Path,
+        default=Path("daily_runs") / "selection_replay.jsonl",
+        help="Selection replay JSONL output path.",
+    )
+    parser.add_argument("--include-pending-reviews", action="store_true")
     parser.add_argument("--content", type=Path, help="Override content JSON path.")
     parser.add_argument("--normalized-content", type=Path, help="Override normalized content JSON path.")
     parser.add_argument("--brief-json", type=Path, help="Override parsed research brief JSON path.")
@@ -602,6 +673,10 @@ def main() -> None:
             run_recipients(args)
         elif args.action == "select":
             run_select(paths, args)
+        elif args.action == "diagnose":
+            run_diagnose(paths, args)
+        elif args.action == "replay":
+            run_replay(paths, args)
         elif args.action == "build":
             run_build(paths, args, write_ledger=False)
         elif args.action == "package-test":
