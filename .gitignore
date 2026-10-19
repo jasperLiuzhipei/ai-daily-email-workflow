@@ -2,7 +2,12 @@
 config/email_settings.json
 config/recipients.json
 config/recipients.*.backup.json
+config/recipients.json.backup-*
 config/editor_settings.json
+config/ai_runtime.json
+config/email_settings.json.*
+config/editor_settings.json.*
+config/ai_runtime.json.*
 .env
 .env.*
 !.env.example
@@ -12,6 +17,15 @@ __pycache__/
 *.py[cod]
 .DS_Store
 .pytest_cache/
+.venv/
+venv/
+node_modules/
+*.tsbuildinfo
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
 
 # Optional local runtime directories when this repository is used as the job root
 daily_runs/
@@ -22,6 +36,9 @@ email_packages/
 # Local API image candidates and temporary exports
 *.eml
 *.log
+
+# Local feedback-service state
+feedback_service/data/
 
 # Historical local planning notes; the current deployment contract lives in docs/.
 docs/ai_daily_completion_priority.md

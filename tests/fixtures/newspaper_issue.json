@@ -1,0 +1,74 @@
+{
+  "date": "9月15日",
+  "display_date": "2026年9月15日 星期二",
+  "issue": 45,
+  "series": "trial",
+  "title": "今日 AI 情报雷达｜9月15日",
+  "subtitle": "试运行第45期",
+  "eyebrow": "AI SIGNAL RADAR",
+  "editor_note": "今天关注本地检索、工具可靠性与模型部署。",
+  "summary_headline": "从工具调用走向结果验证",
+  "summary": "开放工具增加了部署选择，结果检查仍是应用落地的一环。",
+  "news_section": {"title": "行业动态", "subtitle": "产品与研究进展"},
+  "paper": {
+    "section_title": "研究前沿",
+    "title": "任务状态检查补充工具调用评估",
+    "conclusion": "工具返回成功并不保证任务完成，评估还需检查最终状态。",
+    "problem": "现有评估容易把调用正常结束视为任务成功，遗漏结果偏差。",
+    "mechanism": "研究为每项任务定义目标状态，并在工具执行后逐项核对状态变化。",
+    "evidence": "实验显示，一些未达成目标的尝试仍正常结束，状态检查能识别这些遗漏。",
+    "insight": "接入自动化工具时，应把任务验收条件写成可执行检查。",
+    "boundary": "结论来自设定任务的离线评估，实际系统还需单独验证。",
+    "image": "assets/research-fixture.png",
+    "image_alt": "任务执行与状态核对的示意图",
+    "links": [{"label": "论文", "url": "https://example.com/research/state-checks"}]
+  },
+  "news": [
+    {
+      "title": "团队开放跨模态检索模型",
+      "category": "model_update",
+      "tags": ["模型"],
+      "one_liner": "团队开放模型权重，图片和文本可共享检索入口。",
+      "why": "本地运行增加了敏感素材检索的选择。",
+      "observation_label": "行业视角",
+      "observation": "落地时可先验证业务素材的检索准确率。",
+      "url": "https://example.com/news/retrieval"
+    },
+    {
+      "title": "研究提出任务验收清单",
+      "category": "methods_and_views",
+      "tags": ["方法"],
+      "one_liner": "研究以验收清单约束工具任务的最终结果。",
+      "why": "明确目标有助于发现正常调用后的遗漏。",
+      "observation_label": "工作启发",
+      "observation": "清单应覆盖业务结果与意外副作用。",
+      "url": "https://example.com/news/checklist"
+    },
+    {
+      "title": "工具支持离线整理文档",
+      "category": "product_update",
+      "tags": ["工具"],
+      "one_liner": "文档工具新增离线整理与分类能力。",
+      "why": "用户可在本地完成基础内容归类。",
+      "observation_label": "工作启发",
+      "observation": "业务试用应检查分类结果的可追溯性。",
+      "url": "https://example.com/news/documents"
+    },
+    {
+      "title": "模型部署研究强调工作流程适配",
+      "category": "methods_and_views",
+      "tags": ["研究"],
+      "one_liner": "研究关注模型部署与业务工作流程之间的适配。",
+      "why": "单看模型能力难以解释具体团队的应用成效。",
+      "observation_label": "行业视角",
+      "observation": "部署前可把流程责任与质量验收一并纳入试点。",
+      "url": "https://example.com/news/workflows"
+    }
+  ],
+  "footer": {
+    "title": "公开测试样稿",
+    "body": "本稿只包含合成素材，用于验证日报构建与发送前检查。",
+    "name": "Test Editorial",
+    "email": "editor@example.com"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "email_shell": {
+    "eyebrow": "AI SIGNAL RADAR",
+    "news_section": {
+      "title": "行业动态",
+      "subtitle": "精选今日值得关注的 AI 产品、技术与行业信号"
+    }
+  },
+  "observation": {
+    "allowed_labels": ["行业视角", "工作启发"],
+    "default_label": "行业视角"
+  },
+  "research_structure": {
+    "problem": "研究问题",
+    "mechanism": "方法机制",
+    "evidence": "关键证据",
+    "insight": "应用启发",
+    "boundary_label": "边界提示"
+  },
+  "boundary": {
+    "render_research_boundary": true,
+    "render_news_only_when_material": true,
+    "risk_cues": ["安全", "隐私", "漏洞", "泄露", "攻击", "恶意", "供应链", "权限", "合规", "法律", "诉讼", "争议"],
+    "source_uncertainty_cues": ["传闻", "未证实", "非官方", "内测", "灰度", "beta", "preview"]
+  }
+}

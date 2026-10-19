@@ -9,20 +9,77 @@ or a company OpenAI-compatible image gateway.
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import json
-import os
-import time
+import re
+import struct
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ai_gateway_client import (
+    GatewayError,
+    generate_image_bytes,
+    load_runtime_config,
+    provider_snapshot as runtime_provider_snapshot,
+    resolve_provider as resolve_runtime_provider,
+)
 from image_provider_registry import ImageProviderError, load_provider_registry, provider_snapshot, resolve_provider
 
 
 class GenerateError(Exception):
     pass
+
+
+def inspect_image_payload(raw: bytes, *, expected_format: str | None) -> dict[str, Any]:
+    """Reject gateway error pages and record basic image properties.
+
+    The production default is PNG, so dimensions can be verified without a
+    Pillow dependency. JPEG/WebP payloads still receive strict magic-byte
+    checks; their dimensions are left for the later staging validator.
+    """
+
+    image_format = ""
+    width: int | None = None
+    height: int | None = None
+    if raw.startswith(b"\x89PNG\r\n\x1a\n") and len(raw) >= 24:
+        image_format = "png"
+        width, height = struct.unpack(">II", raw[16:24])
+    elif raw.startswith(b"\xff\xd8\xff"):
+        image_format = "jpeg"
+    elif len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        image_format = "webp"
+    else:
+        raise GenerateError("Image gateway returned bytes that are not PNG, JPEG, or WebP.")
+    expected = (expected_format or "").strip().lower().replace("jpg", "jpeg")
+    if expected and expected != image_format:
+        raise GenerateError(f"Image gateway returned {image_format}, expected {expected}.")
+    if width is not None and height is not None and (width < 512 or height < 512):
+        raise GenerateError(f"Image gateway returned an unexpectedly small image: {width}x{height}.")
+    return {"format": image_format, "width": width, "height": height, "bytes": len(raw)}
+
+
+def validate_requested_aspect(image_info: dict[str, Any], requested_size: str | None) -> None:
+    """Ensure the gateway honored the requested orientation and aspect ratio.
+
+    Providers may return a different pixel density within a billing tier, so
+    exact dimensions are not required. A material aspect-ratio change is a
+    hard failure because it breaks the email composition.
+    """
+
+    if not requested_size:
+        return
+    match = re.fullmatch(r"(\d+)x(\d+)", requested_size.strip().lower())
+    width = image_info.get("width")
+    height = image_info.get("height")
+    if not match or not isinstance(width, int) or not isinstance(height, int) or height <= 0:
+        return
+    requested_ratio = int(match.group(1)) / int(match.group(2))
+    actual_ratio = width / height
+    if abs(actual_ratio / requested_ratio - 1) > 0.03:
+        raise GenerateError(
+            f"Image gateway returned aspect ratio {width}x{height}, expected approximately {requested_size}."
+        )
 
 
 def sha256_bytes(value: bytes) -> str:
@@ -53,6 +110,8 @@ def output_manifest(
     request: dict,
     request_id: str | None,
     response_metadata: dict[str, Any],
+    image_info: dict[str, Any],
+    fallback_allowed: bool,
 ) -> None:
     payload = {
         "schema_version": 1,
@@ -62,11 +121,15 @@ def output_manifest(
         "prompt_file": str(prompt_file),
         "prompt_sha256": sha256_text(prompt),
         "request": request,
+        "route_policy": {
+            "fallback_allowed": fallback_allowed,
+            "fallback_used": bool(response_metadata.get("fallback", {}).get("used")),
+        },
         "response": response_metadata,
         "output": {
             "path": str(output),
             "sha256": sha256_bytes(output.read_bytes()),
-            "bytes": output.stat().st_size,
+            **image_info,
         },
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -74,7 +137,7 @@ def output_manifest(
 
 
 def json_value(value: Any) -> Any:
-    """Serialize SDK response metadata without persisting image payloads."""
+    """Serialize gateway metadata without persisting image payloads."""
 
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
@@ -88,74 +151,122 @@ def json_value(value: Any) -> Any:
     return str(value)
 
 
-def generate_openai_image(
+def generate_api_image(
     provider_id: str,
     provider: dict,
     prompt: str,
     output: Path,
     *,
-    size: str,
-    quality: str,
-    timeout_seconds: int,
-    max_retries: int,
+    size: str | None,
+    quality: str | None,
+    runtime_config_path: Path | None,
+    fallback_runtime_config_path: Path | None,
     dry_run: bool,
-) -> tuple[dict, str | None, dict[str, Any]]:
-    api_key_env = str(provider.get("api_key_env") or "OPENAI_API_KEY")
-    base_url_env = str(provider.get("base_url_env") or "OPENAI_BASE_URL")
-    request = {
-        "model": str(provider.get("model") or "gpt-image-2"),
-        "size": size,
-        "quality": quality,
-        "output_format": "png",
+    allow_fallback: bool = True,
+) -> tuple[dict, str | None, dict[str, Any], dict[str, Any] | None]:
+    configured_model = str(provider.get("model") or "gpt-image-2")
+    fallback_models = {
+        str(model).strip()
+        for model in provider.get("fallback_models", [])
+        if str(model).strip()
     }
+    request_overrides: dict[str, Any] = {}
+    if size:
+        request_overrides["size"] = size
+    if quality:
+        request_overrides["quality"] = quality
+    if provider.get("response_format"):
+        request_overrides["response_format"] = provider["response_format"]
+    def generate_from_runtime(
+        config_path: Path | None,
+        *,
+        allow_fallback_model: bool = False,
+    ) -> tuple[bytes, dict[str, Any], dict[str, Any]]:
+        runtime = resolve_runtime_provider("image", load_runtime_config(config_path))
+        allowed_models = {configured_model}
+        if allow_fallback_model:
+            allowed_models.update(fallback_models)
+        if runtime.model not in allowed_models:
+            raise GenerateError(
+                f"Image runtime model {runtime.model!r} is not compatible with image provider "
+                f"{provider_id!r}; allowed models: {sorted(allowed_models)!r}."
+            )
+        request = {"model": runtime.model, **runtime.request_defaults, **request_overrides}
+        raw, request, response_metadata = generate_image_bytes(
+            runtime,
+            prompt=prompt,
+            request_overrides=request_overrides,
+        )
+        response_metadata = {
+            **response_metadata,
+            "runtime": runtime_provider_snapshot(runtime),
+        }
+        return raw, request, response_metadata
+
+    primary_runtime = resolve_runtime_provider("image", load_runtime_config(runtime_config_path))
+    if primary_runtime.model != configured_model:
+        raise GenerateError(
+            f"Image runtime model {primary_runtime.model!r} does not match image provider registry model {configured_model!r}."
+        )
+    request = {"model": primary_runtime.model, **primary_runtime.request_defaults, **request_overrides}
     if dry_run:
-        return request, None, {"dry_run": True}
-
-    api_key = os.environ.get(api_key_env)
-    if not api_key:
-        raise GenerateError(f"Missing {api_key_env}; configure it in the job secret store.")
+        return request, None, {"dry_run": True, "provider": primary_runtime.model}, None
 
     try:
-        from openai import OpenAI
-    except Exception as exc:
-        raise GenerateError(f"Missing openai package: {exc}") from exc
-
-    client_kwargs = {
-        "api_key": api_key,
-        "timeout": timeout_seconds,
-        "max_retries": max_retries,
-    }
-    if base_url := os.environ.get(base_url_env):
-        client_kwargs["base_url"] = base_url.rstrip("/")
-    client = OpenAI(**client_kwargs)
-    started = time.perf_counter()
-    try:
-        result = client.images.generate(prompt=prompt, n=1, **request)
-    except Exception as exc:
-        raise GenerateError(f"{provider_id} image request failed: {exc}") from exc
-    elapsed_ms = round((time.perf_counter() - started) * 1000)
-    if not result.data or not result.data[0].b64_json:
-        raise GenerateError(f"{provider_id} did not return a base64 image payload.")
-
+        raw, request, response_metadata = generate_from_runtime(runtime_config_path)
+    except GatewayError as primary_error:
+        if not allow_fallback or fallback_runtime_config_path is None:
+            raise GenerateError(f"{provider_id} image request failed: {primary_error}") from primary_error
+        try:
+            raw, request, response_metadata = generate_from_runtime(
+                fallback_runtime_config_path,
+                allow_fallback_model=True,
+            )
+        except (GatewayError, GenerateError) as fallback_error:
+            raise GenerateError(
+                f"{provider_id} primary image request failed: {primary_error}; fallback also failed: {fallback_error}"
+            ) from fallback_error
+        response_metadata["fallback"] = {
+            "used": True,
+            "primary_error": str(primary_error)[:400],
+        }
+    image_info = inspect_image_payload(raw, expected_format=str(request.get("output_format") or ""))
+    validate_requested_aspect(image_info, str(request.get("size") or ""))
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_bytes(base64.b64decode(result.data[0].b64_json))
-    return request, getattr(result, "_request_id", None), {
-        "elapsed_ms": elapsed_ms,
-        "usage": json_value(getattr(result, "usage", None)),
-    }
+    output.write_bytes(raw)
+    return request, response_metadata.get("request_id"), json_value(response_metadata), image_info
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--provider", default="gpt_image_2", help="Provider id or alias from image_providers.json.")
+    parser.add_argument(
+        "--provider",
+        help="Provider id or alias from image_providers.json. Defaults to the registry default provider.",
+    )
     parser.add_argument("--provider-registry", type=Path)
+    parser.add_argument(
+        "--runtime-config",
+        type=Path,
+        help="AI runtime config. Defaults to config/ai_runtime.json; secrets remain in environment variables.",
+    )
+    parser.add_argument(
+        "--fallback-runtime-config",
+        type=Path,
+        help="Optional image-only runtime config used after a primary gateway request failure.",
+    )
+    parser.add_argument(
+        "--forbid-fallback",
+        action="store_true",
+        help=(
+            "Require the configured primary Image2 route. A primary failure stops generation instead of "
+            "silently using an alternate gateway."
+        ),
+    )
     parser.add_argument("--prompt-file", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--generation-manifest", required=True, type=Path)
-    parser.add_argument("--size", default="auto")
-    parser.add_argument("--quality", default="medium")
-    parser.add_argument("--timeout-seconds", type=int, default=120, help="Per-request API timeout.")
-    parser.add_argument("--max-retries", type=int, default=1, help="OpenAI SDK retry count for transient API errors.")
+    parser.add_argument("--size", help="Override image runtime default size.")
+    parser.add_argument("--quality", help="Override image runtime default quality.")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -171,21 +282,17 @@ def main() -> None:
             raise GenerateError(f"No generator adapter is implemented for provider {provider_id!r}.")
         if args.out.exists() and not args.force:
             raise GenerateError(f"Output already exists: {args.out}. Use --force to overwrite.")
-        if args.timeout_seconds <= 0:
-            raise GenerateError("--timeout-seconds must be positive.")
-        if args.max_retries < 0:
-            raise GenerateError("--max-retries must be zero or greater.")
-
         prompt = load_prompt(args.prompt_file)
-        request, request_id, response_metadata = generate_openai_image(
+        request, request_id, response_metadata, image_info = generate_api_image(
             provider_id,
             provider,
             prompt,
             args.out,
             size=args.size,
             quality=args.quality,
-            timeout_seconds=args.timeout_seconds,
-            max_retries=args.max_retries,
+            runtime_config_path=args.runtime_config,
+            fallback_runtime_config_path=args.fallback_runtime_config,
+            allow_fallback=not args.forbid_fallback,
             dry_run=args.dry_run,
         )
         if args.dry_run:
@@ -197,6 +304,8 @@ def main() -> None:
                 )
             )
             return
+        if image_info is None:
+            raise GenerateError("Image metadata validation did not run.")
         output_manifest(
             args.generation_manifest,
             provider_id=provider_id,
@@ -207,8 +316,10 @@ def main() -> None:
             request=request,
             request_id=request_id,
             response_metadata=response_metadata,
+            image_info=image_info,
+            fallback_allowed=not args.forbid_fallback,
         )
-    except (OSError, ImageProviderError, GenerateError) as exc:
+    except (OSError, ImageProviderError, GatewayError, GenerateError) as exc:
         raise SystemExit(f"Image generation failed: {exc}") from exc
 
     print(f"Generated image: {args.out}")

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -28,6 +29,7 @@ from image_provider_registry import (
     provider_snapshot,
     resolve_provider,
 )
+from review_research_image_editorial import EditorialReviewError, validate_editorial_review_for_approval
 
 class StageError(Exception):
     pass
@@ -46,6 +48,50 @@ def load_generation_manifest(path: Path | None) -> dict | None:
     data = load_json_object(path)
     if data.get("schema_version") != 1:
         raise StageError("generation manifest schema_version must be 1.")
+    return data
+
+
+def validate_generation_prompt(manifest: dict, prompt_file: Path) -> None:
+    """Bind API lineage to the exact prompt sent by generate_research_image."""
+
+    expected_hash = manifest.get("prompt_sha256")
+    if not isinstance(expected_hash, str) or not expected_hash:
+        raise StageError("generation manifest prompt_sha256 is required for API images.")
+    try:
+        # The generator strips the UTF-8 file before sending it to the API.
+        # Hash that payload, not the file bytes used by the staging manifest.
+        prompt = prompt_file.read_text(encoding="utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise StageError("--prompt-file must contain UTF-8 text.") from exc
+    if not prompt or hashlib.sha256(prompt.encode("utf-8")).hexdigest() != expected_hash:
+        raise StageError("generation manifest prompt hash does not match --prompt-file.")
+
+
+def load_derivation_manifest(path: Path | None, *, image_source: Path) -> dict | None:
+    """Validate optional hybrid-render provenance before writing final lineage."""
+
+    if not path:
+        return None
+    if not path.exists():
+        raise StageError(f"Missing derivation manifest: {path}")
+    data = load_json_object(path)
+    if data.get("schema_version") != 1:
+        raise StageError("derivation manifest schema_version must be 1.")
+    output = data.get("output") if isinstance(data.get("output"), dict) else {}
+    expected_hash = str(output.get("sha256") or "").strip()
+    if not expected_hash or expected_hash != file_sha256(image_source):
+        raise StageError("derivation manifest output hash does not match --image-source.")
+    for field in ("base_image", "overlay_plan"):
+        record = data.get(field)
+        if not isinstance(record, dict):
+            raise StageError(f"derivation manifest {field} must be an object.")
+        raw_path = str(record.get("path") or "").strip()
+        expected_hash = str(record.get("sha256") or "").strip()
+        source = Path(raw_path)
+        if not raw_path or not expected_hash or not source.exists():
+            raise StageError(f"derivation manifest {field} path/hash is incomplete or unavailable.")
+        if file_sha256(source) != expected_hash:
+            raise StageError(f"derivation manifest {field} hash does not match.")
     return data
 
 
@@ -97,9 +143,16 @@ def maybe_compress_image(src: Path, dst: Path, max_bytes: int) -> Path:
             img = img.resize(new_size, Image.Resampling.LANCZOS)
 
         has_alpha = img.mode in ("RGBA", "LA") or ("transparency" in img.info)
-        if dst.suffix.lower() == ".png" or has_alpha:
+        if has_alpha:
+            # Email clients and visual reviewers can render transparent pixels
+            # against a dark canvas, making generated black labels unreadable.
+            # Preserve the generated drawing while fixing its paper background.
+            paper = Image.new("RGBA", img.size, "white")
+            paper.alpha_composite(img.convert("RGBA"))
+            img = paper.convert("RGB")
+        if dst.suffix.lower() == ".png":
             img.save(dst, optimize=True)
-            if dst.stat().st_size <= max_bytes or has_alpha:
+            if dst.stat().st_size <= max_bytes:
                 return dst
 
         rgb = img.convert("RGB")
@@ -145,6 +198,11 @@ def main() -> None:
         help="Manifest emitted by generate_research_image.py for API-generated candidates.",
     )
     parser.add_argument(
+        "--derivation-manifest",
+        type=Path,
+        help="Optional hybrid-render provenance manifest for a text-free model base plus deterministic overlay.",
+    )
+    parser.add_argument(
         "--quality-decision",
         choices=["approved", "pending", "rejected"],
         help="Baseline images default to approved; all candidates default to pending.",
@@ -152,6 +210,14 @@ def main() -> None:
     parser.add_argument(
         "--comparison-notes",
         help="Required when manually approving a non-baseline provider against the native ImageGen baseline.",
+    )
+    parser.add_argument(
+        "--editorial-review",
+        type=Path,
+        help=(
+            "Structured Visual Handoff/image review from review_research_image_editorial.py. "
+            "Required before an image can be marked approved."
+        ),
     )
     parser.add_argument("--manifest", type=Path, help="Output image lineage manifest path.")
     parser.add_argument(
@@ -197,6 +263,7 @@ def main() -> None:
             )
         quality_decision = args.quality_decision or default_quality_decision(provider)
         generation_manifest = load_generation_manifest(args.generation_manifest)
+        derivation_manifest = load_derivation_manifest(args.derivation_manifest, image_source=args.image_source)
         if provider.get("execution") == "openai_images_api" and not generation_manifest:
             raise StageError(f"--generation-manifest is required for API provider {provider_id}.")
         if provider.get("requires_manual_comparison") and quality_decision == "approved" and not args.comparison_notes:
@@ -206,17 +273,49 @@ def main() -> None:
             )
         if not args.image_source.exists():
             raise StageError(f"Missing image source: {args.image_source}")
+        editorial_review = None
+        if quality_decision == "approved":
+            if not args.editorial_review:
+                raise StageError(
+                    "--editorial-review is required before approving a research image. "
+                    "Run review_research_image_editorial.py audit, inspect the image, then approve the review."
+                )
+            try:
+                editorial_review = validate_editorial_review_for_approval(
+                    args.editorial_review,
+                    image_source=args.image_source,
+                    brief_json=args.brief_json,
+                )
+            except EditorialReviewError as exc:
+                raise StageError(str(exc)) from exc
         if generation_manifest:
             generated_provider = generation_manifest.get("provider")
             output = generation_manifest.get("output")
             if not isinstance(generated_provider, dict) or generated_provider.get("id") != provider_id:
                 raise StageError("generation manifest provider does not match --provider-id.")
-            if not isinstance(output, dict) or output.get("sha256") != file_sha256(args.image_source):
-                raise StageError("generation manifest output hash does not match --image-source.")
+            # A hybrid overlay intentionally changes the generated raster after
+            # the provider call in order to render exact, auditable Chinese
+            # labels.  In that case the generation manifest must match the
+            # derivation manifest's immutable base image; the derivation
+            # manifest separately proves that the current source is the exact
+            # output of that overlay.  Native/API-only images retain the
+            # original strict final-source comparison.
+            expected_generated_hash = file_sha256(args.image_source)
+            if derivation_manifest:
+                expected_generated_hash = str(derivation_manifest["base_image"]["sha256"])
+            if not isinstance(output, dict) or output.get("sha256") != expected_generated_hash:
+                raise StageError(
+                    "generation manifest output hash does not match the image source "
+                    "or its derivation base image."
+                )
         if provider.get("requires_prompt") and not args.prompt_file:
             raise StageError(f"--prompt-file is required for provider {provider_id}.")
         if args.prompt_file and not args.prompt_file.exists():
             raise StageError(f"Missing prompt file: {args.prompt_file}")
+        if provider.get("execution") == "openai_images_api":
+            if not args.prompt_file:
+                raise StageError("--prompt-file is required to verify API generation provenance.")
+            validate_generation_prompt(generation_manifest, args.prompt_file)
         if args.imagegen_start_marker and not args.imagegen_start_marker.exists():
             raise StageError(f"Missing imagegen start marker: {args.imagegen_start_marker}")
         if (
@@ -235,6 +334,10 @@ def main() -> None:
         ):
             raise StageError("Image source is older than the imagegen start marker. It was not generated in this run.")
         imagegen_root = args.imagegen_output_root or default_imagegen_output_root()
+        derivation_base = None
+        if derivation_manifest:
+            raw_base = derivation_manifest["base_image"].get("path")
+            derivation_base = Path(str(raw_base)) if raw_base else None
         if (
             provider.get("requires_codex_output_root")
             and not args.allow_non_imagegen_source_root
@@ -272,20 +375,41 @@ def main() -> None:
             "source_kind": source_kind,
             "provider": provider_snapshot(provider_id, provider),
             "quality_gate": {
-                "policy": "baseline_locked",
+                "policy": "baseline_locked_editorial_v2",
                 "decision": quality_decision,
                 "requires_manual_comparison": bool(provider.get("requires_manual_comparison")),
                 "comparison_notes": args.comparison_notes,
             },
+            "editorial_review": {
+                "path": str(args.editorial_review),
+                "sha256": file_sha256(args.editorial_review),
+                "decision": editorial_review.get("decision"),
+                "structural_decision": editorial_review.get("structural_decision"),
+            }
+            if editorial_review
+            else None,
             "generation_manifest": {
                 "path": str(args.generation_manifest),
                 "sha256": file_sha256(args.generation_manifest),
             }
             if args.generation_manifest
             else None,
+            "derivation_manifest": {
+                "path": str(args.derivation_manifest),
+                "sha256": file_sha256(args.derivation_manifest),
+                "mode": derivation_manifest.get("mode"),
+                "base_image": derivation_manifest.get("base_image"),
+                "overlay_plan": derivation_manifest.get("overlay_plan"),
+            }
+            if derivation_manifest
+            else None,
             "imagegen_output_root": str(imagegen_root) if provider.get("requires_codex_output_root") else None,
             "imagegen_source_root_checked": bool(
-                provider.get("requires_codex_output_root") and not args.allow_non_imagegen_source_root
+                provider.get("requires_codex_output_root")
+                and (
+                    is_within_path(args.image_source, imagegen_root)
+                    or (derivation_base is not None and is_within_path(derivation_base, imagegen_root))
+                )
             ),
             "content": str(out_content),
             "research_index": args.research_index,

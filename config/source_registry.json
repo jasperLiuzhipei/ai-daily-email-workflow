@@ -1,5 +1,77 @@
 {
-  "version": 1,
+  "version": 4,
+  "official_social_accounts": [
+    {
+      "platform": "x",
+      "handle": "OpenAI",
+      "organization": "OpenAI"
+    },
+    {
+      "platform": "x",
+      "handle": "AnthropicAI",
+      "organization": "Anthropic"
+    },
+    {
+      "platform": "x",
+      "handle": "GoogleDeepMind",
+      "organization": "Google DeepMind"
+    },
+    {
+      "platform": "x",
+      "handle": "GoogleAI",
+      "organization": "Google AI"
+    },
+    {
+      "platform": "x",
+      "handle": "xAI",
+      "organization": "xAI"
+    },
+    {
+      "platform": "x",
+      "handle": "Tencent",
+      "organization": "Tencent"
+    },
+    {
+      "platform": "x",
+      "handle": "Alibaba_Cloud",
+      "organization": "Alibaba Cloud"
+    },
+    {
+      "platform": "x",
+      "handle": "Alibaba_Qwen",
+      "organization": "Qwen"
+    },
+    {
+      "platform": "x",
+      "handle": "Qwen",
+      "organization": "Qwen"
+    },
+    {
+      "platform": "x",
+      "handle": "DeepSeek_AI",
+      "organization": "DeepSeek"
+    },
+    {
+      "platform": "x",
+      "handle": "MoonshotAI",
+      "organization": "Moonshot AI"
+    },
+    {
+      "platform": "x",
+      "handle": "MiniMax__AI",
+      "organization": "MiniMax"
+    },
+    {
+      "platform": "x",
+      "handle": "stepfun_ai",
+      "organization": "StepFun"
+    },
+    {
+      "platform": "x",
+      "handle": "ByteDance",
+      "organization": "ByteDance"
+    }
+  ],
   "sources": [
     {
       "id": "aihot_main",
@@ -10,6 +82,7 @@
       "transport": "rss",
       "pool": "news",
       "authority": "aggregator",
+      "quality_tier": "discovery",
       "role": "Primary discovery and Chinese AI news recall"
     },
     {
@@ -21,6 +94,7 @@
       "transport": "rss",
       "pool": "research",
       "authority": "aggregator",
+      "quality_tier": "discovery",
       "role": "Research recall with a 72-96 hour lookback"
     },
     {
@@ -32,6 +106,7 @@
       "transport": "rss",
       "pool": "news",
       "authority": "aggregator",
+      "quality_tier": "discovery",
       "role": "Supplemental recall for fresh workflow, skill, and engineering signals; always deduplicated and scored"
     },
     {
@@ -43,6 +118,7 @@
       "transport": "html",
       "pool": "news",
       "authority": "aggregator_editorial",
+      "quality_tier": "discovery",
       "role": "Editorial prefilter and modest ranking signal; never replaces primary-source resolution, freshness checks, or content-level deduplication"
     },
     {
@@ -54,6 +130,7 @@
       "transport": "rss",
       "pool": "news",
       "authority": "aggregator",
+      "quality_tier": "discovery",
       "role": "English engineering, prompt, skill, and workflow recall"
     },
     {
@@ -66,8 +143,13 @@
       "parser": "anthropic_listing",
       "pool": "research",
       "authority": "official_research",
-      "path_prefixes": ["/research/"],
-      "exclude_prefixes": ["/research/team/"],
+      "quality_tier": "primary",
+      "path_prefixes": [
+        "/research/"
+      ],
+      "exclude_prefixes": [
+        "/research/team/"
+      ],
       "source_type_override": "paper",
       "role": "First-party research, evaluations, safety, and capability boundaries"
     },
@@ -81,7 +163,11 @@
       "parser": "anthropic_listing",
       "pool": "news",
       "authority": "official_news",
-      "path_prefixes": ["/news/", "/features/"],
+      "quality_tier": "primary",
+      "path_prefixes": [
+        "/news/",
+        "/features/"
+      ],
       "exclude_prefixes": [],
       "role": "First-party Claude product, company, safety, and engineering updates"
     },
@@ -94,6 +180,7 @@
       "transport": "rss",
       "pool": "news",
       "authority": "official_news",
+      "quality_tier": "primary",
       "role": "First-party Gemini, model, agent, science, and safety updates"
     },
     {
@@ -105,6 +192,7 @@
       "transport": "rss",
       "pool": "research",
       "authority": "official_research",
+      "quality_tier": "primary",
       "source_type_override": "report",
       "role": "First-party agent, evaluation, productivity, and applied AI research"
     },
@@ -117,51 +205,236 @@
       "transport": "link_resolution",
       "pool": "research",
       "authority": "paper_repository",
+      "quality_tier": "resolution_only",
       "role": "Primary paper link resolved from the AIHot paper feed; not queried broadly"
     },
     {
       "id": "openai_newsroom",
       "name": "OpenAI Newsroom",
-      "url": "https://openai.com/news/",
+      "url": "https://openai.com/news/rss.xml",
       "enabled": true,
-      "integration": "aggregator_primary_resolution",
-      "transport": "indirect",
-      "pool": "mixed",
+      "integration": "official_direct",
+      "transport": "rss",
+      "pool": "news",
       "authority": "official_first_party",
-      "role": "Covered through AIHot and BestBlogs with the final link resolved to OpenAI"
+      "quality_tier": "primary",
+      "role": "First-party OpenAI product, research, safety, engineering, security, and company updates",
+      "catchup_lookback_hours": 72
+    },
+    {
+      "id": "nvidia_developer_blog",
+      "name": "NVIDIA Developer Blog",
+      "url": "https://developer.nvidia.com/blog/feed/",
+      "enabled": true,
+      "integration": "official_direct",
+      "transport": "rss",
+      "pool": "news",
+      "authority": "official_first_party",
+      "quality_tier": "primary",
+      "catchup_lookback_hours": 72,
+      "request_timeout_seconds": 15,
+      "request_attempts": 1,
+      "role": "First-party NVIDIA agent infrastructure, runtime safety, and developer platform updates"
     },
     {
       "id": "google_research",
       "name": "Google Research Blog",
       "url": "https://research.google/blog/",
       "enabled": true,
-      "integration": "aggregator_primary_resolution",
-      "transport": "indirect",
+      "integration": "official_direct",
+      "transport": "html",
+      "parser": "generic_listing",
       "pool": "research",
       "authority": "official_research",
-      "role": "Covered through AIHot and BestBlogs until a stable direct feed is available"
+      "quality_tier": "primary",
+      "path_prefixes": [
+        "/blog/"
+      ],
+      "request_timeout_seconds": 15,
+      "request_attempts": 1,
+      "role": "First-party Google research, datasets, software systems, responsible AI, and applied AI updates"
     },
     {
       "id": "huggingface_blog",
       "name": "Hugging Face Blog",
       "url": "https://huggingface.co/blog",
       "enabled": true,
-      "integration": "aggregator_primary_resolution",
-      "transport": "indirect",
-      "pool": "mixed",
+      "integration": "official_direct",
+      "transport": "html",
+      "parser": "generic_listing",
+      "pool": "news",
       "authority": "official_and_community",
-      "role": "Engineering and open-source recall through BestBlogs; community posts require extra filtering"
+      "quality_tier": "primary",
+      "path_prefixes": [
+        "/blog/"
+      ],
+      "request_timeout_seconds": 15,
+      "request_attempts": 1,
+      "role": "First-party Hugging Face engineering, open-source, model, dataset, and enterprise updates"
     },
     {
       "id": "meta_ai_blog",
       "name": "Meta AI Blog",
       "url": "https://ai.meta.com/blog/",
       "enabled": true,
-      "integration": "aggregator_primary_resolution",
-      "transport": "indirect",
-      "pool": "mixed",
+      "integration": "official_direct",
+      "transport": "html",
+      "parser": "generic_listing",
+      "pool": "news",
       "authority": "official_first_party",
-      "role": "Covered through AIHot and BestBlogs until a stable direct feed is available"
+      "quality_tier": "primary",
+      "path_prefixes": [
+        "/blog/"
+      ],
+      "request_timeout_seconds": 15,
+      "request_attempts": 1,
+      "role": "First-party Meta AI research, open-source, infrastructure, and product updates"
+    },
+    {
+      "id": "zai_release_notes",
+      "name": "Z.ai model release notes",
+      "url": "https://docs.z.ai/release-notes/new-released",
+      "enabled": true,
+      "integration": "official_direct",
+      "transport": "html",
+      "parser": "release_notes",
+      "pool": "news",
+      "authority": "official_first_party",
+      "quality_tier": "primary",
+      "source_type_override": "model_release",
+      "catchup_lookback_hours": 72,
+      "request_timeout_seconds": 15,
+      "request_attempts": 1,
+      "role": "First-party Z.ai / Zhipu model and capability releases, including GLM Flash variants"
+    },
+    {
+      "id": "minimax_release_notes",
+      "name": "MiniMax model release notes",
+      "url": "https://platform.minimax.io/docs/release-notes/models",
+      "enabled": true,
+      "integration": "official_direct",
+      "transport": "html",
+      "parser": "release_notes",
+      "pool": "news",
+      "authority": "official_first_party",
+      "quality_tier": "primary",
+      "source_type_override": "model_release",
+      "catchup_lookback_hours": 72,
+      "request_timeout_seconds": 15,
+      "request_attempts": 1,
+      "role": "First-party MiniMax language, video, audio, image, and music model releases"
+    },
+    {
+      "id": "moonshot_kimi_blog",
+      "name": "Moonshot AI / Kimi blog",
+      "url": "https://platform.moonshot.cn/blog",
+      "enabled": true,
+      "integration": "official_direct",
+      "transport": "html",
+      "parser": "dated_link_time_cards",
+      "pool": "news",
+      "authority": "official_first_party",
+      "quality_tier": "primary",
+      "path_prefixes": [
+        "/blog/posts/"
+      ],
+      "request_timeout_seconds": 15,
+      "request_attempts": 1,
+      "role": "First-party Kimi model, API, agent, price, and technical update announcements"
+    },
+    {
+      "id": "google_developers",
+      "name": "Google Developers Blog",
+      "url": "https://developers.googleblog.com/",
+      "enabled": true,
+      "integration": "official_direct",
+      "transport": "html",
+      "parser": "generic_listing",
+      "pool": "news",
+      "authority": "official_first_party",
+      "quality_tier": "primary",
+      "catchup_lookback_hours": 72,
+      "request_timeout_seconds": 20,
+      "request_attempts": 1,
+      "role": "First-party agent harness, developer tooling and engineering methods; date-only cards receive bounded catch-up."
+    },
+    {
+      "id": "arxiv_agent_research",
+      "name": "arXiv agent and evaluation research",
+      "url": "https://export.arxiv.org/api/query?search_query=%28cat%3Acs.AI%20OR%20cat%3Acs.CL%29%20AND%20%28ti%3Aagent%20OR%20ti%3Aagents%20OR%20ti%3Amemory%20OR%20ti%3Aevaluation%20OR%20ti%3Areasoning%29&sortBy=submittedDate&sortOrder=descending&max_results=120",
+      "enabled": true,
+      "integration": "official_direct",
+      "transport": "rss",
+      "pool": "research",
+      "authority": "paper_repository",
+      "quality_tier": "primary",
+      "source_type_override": "paper",
+      "request_timeout_seconds": 30,
+      "request_attempts": 1,
+      "role": "Bounded primary-paper discovery independent of aggregators; latest 120 agent, memory, evaluation or reasoning titles in cs.AI/cs.CL, filtered by original submission time and normal relevance/quality gates."
+    },
+    {
+      "id": "claude_blog",
+      "name": "Claude product and engineering blog",
+      "url": "https://claude.com/blog",
+      "enabled": true,
+      "integration": "official_direct",
+      "transport": "html",
+      "parser": "generic_listing",
+      "pool": "news",
+      "authority": "official_first_party",
+      "quality_tier": "primary",
+      "catchup_lookback_hours": 72,
+      "request_timeout_seconds": 25,
+      "request_attempts": 2,
+      "role": "First-party dated product, model and engineering updates; bounded catch-up with previous-issue deduplication."
+    },
+    {
+      "id": "gemini_api_changelog",
+      "name": "Gemini API release notes",
+      "url": "https://ai.google.dev/gemini-api/docs/changelog",
+      "enabled": true,
+      "integration": "official_direct",
+      "transport": "html",
+      "parser": "generic_listing",
+      "pool": "news",
+      "authority": "official_first_party",
+      "quality_tier": "primary",
+      "catchup_lookback_hours": 72,
+      "request_timeout_seconds": 25,
+      "request_attempts": 2,
+      "role": "First-party dated product, model and engineering updates; bounded catch-up with previous-issue deduplication."
+    },
+    {
+      "id": "deepseek_updates",
+      "name": "DeepSeek API change log",
+      "url": "https://api-docs.deepseek.com/updates/",
+      "enabled": true,
+      "integration": "official_direct",
+      "transport": "html",
+      "parser": "generic_listing",
+      "pool": "news",
+      "authority": "official_first_party",
+      "quality_tier": "primary",
+      "catchup_lookback_hours": 72,
+      "request_timeout_seconds": 25,
+      "request_attempts": 2,
+      "role": "First-party dated product, model and engineering updates; bounded catch-up with previous-issue deduplication."
+    },
+    {
+      "id": "github_ai_engineering",
+      "name": "GitHub AI and engineering",
+      "url": "https://github.blog/ai-and-ml/feed/",
+      "enabled": true,
+      "integration": "official_direct",
+      "transport": "rss",
+      "pool": "news",
+      "authority": "official_first_party",
+      "quality_tier": "primary",
+      "catchup_lookback_hours": 72,
+      "request_timeout_seconds": 20,
+      "request_attempts": 2,
+      "role": "First-party AI engineering, agent runtime, migration, evaluation and production retrospectives."
     }
   ]
 }

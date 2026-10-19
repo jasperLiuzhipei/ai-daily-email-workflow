@@ -1,14 +1,17 @@
 {
   "schema_version": 1,
   "policy": {
-    "default_provider": "codex_imagegen",
+    "default_provider": "marshall_gpt_image_2",
     "baseline_provider": "codex_imagegen",
-    "candidate_mode": "manual_ab_review_required",
-    "production_rule": "Only the baseline provider or an explicitly production-approved provider with an approved per-image quality gate may enter a production email."
+    "candidate_mode": "manual_per_image_review_required",
+    "production_rule": "Configured API image providers may enter production only after the per-image quality gate is approved."
   },
   "providers": {
     "codex_imagegen": {
-      "aliases": ["imagegen", "codex"],
+      "aliases": [
+        "imagegen",
+        "codex"
+      ],
       "execution": "codex_builtin",
       "model": "image_gen",
       "enabled": true,
@@ -19,20 +22,74 @@
       "requires_manual_comparison": false
     },
     "gpt_image_2": {
-      "aliases": ["gpt-image-2", "image2"],
+      "aliases": [
+        "gpt-image-2",
+        "gpt-image-2-vip",
+        "image2",
+        "image2-vip"
+      ],
+      "execution": "openai_images_api",
+      "model": "gpt-image-2-vip",
+      "enabled": true,
+      "baseline": false,
+      "production_allowed": true,
+      "requires_prompt": true,
+      "requires_codex_output_root": false,
+      "requires_manual_comparison": true
+    },
+    "marshall_gpt_image_2": {
+      "aliases": [
+        "marshall-image2",
+        "marshall-gpt-image-2"
+      ],
       "execution": "openai_images_api",
       "model": "gpt-image-2",
+      "fallback_models": [
+        "gpt-image-2-vip"
+      ],
+      "enabled": true,
+      "baseline": false,
+      "production_allowed": true,
+      "requires_prompt": true,
+      "requires_codex_output_root": false,
+      "requires_manual_comparison": true
+    },
+    "nano_banana_image2": {
+      "aliases": [
+        "nano-banana-image2",
+        "nano-banana-gpt-image-2"
+      ],
+      "execution": "openai_images_api",
+      "model": "gpt-image-2",
+      "fallback_models": [
+        "gpt-image-2-vip"
+      ],
+      "enabled": true,
+      "baseline": false,
+      "production_allowed": true,
+      "requires_prompt": true,
+      "requires_codex_output_root": false,
+      "requires_manual_comparison": true
+    },
+    "nano_banana_pro": {
+      "aliases": [
+        "nano-banana-pro",
+        "nano-banana"
+      ],
+      "execution": "openai_images_api",
+      "model": "nano-banana-pro",
       "enabled": true,
       "baseline": false,
       "production_allowed": false,
       "requires_prompt": true,
       "requires_codex_output_root": false,
-      "requires_manual_comparison": true,
-      "api_key_env": "OPENAI_API_KEY",
-      "base_url_env": "OPENAI_BASE_URL"
+      "requires_manual_comparison": true
     },
     "manual_provided": {
-      "aliases": ["provided", "manual"],
+      "aliases": [
+        "provided",
+        "manual"
+      ],
       "execution": "manual",
       "model": null,
       "enabled": true,

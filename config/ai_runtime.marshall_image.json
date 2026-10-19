@@ -1,0 +1,25 @@
+{
+  "schema_version": 2,
+  "defaults": {
+    "timeout_seconds": 240,
+    "max_retries": 1
+  },
+  "text": {
+    "enabled": false
+  },
+  "image": {
+    "enabled": true,
+    "api_key_env": "AI_DAILY_MARSHALL_IMAGE_API_KEY",
+    "base_url_env": "AI_DAILY_MARSHALL_IMAGE_BASE_URL",
+    "model_env": "AI_DAILY_MARSHALL_IMAGE_MODEL",
+    "model": "gpt-image-2",
+    "endpoint_path": "images/generations",
+    "timeout_seconds": 240,
+    "request_defaults": {
+      "size": "1920x1080",
+      "quality": "high",
+      "output_format": "png",
+      "response_format": "b64_json"
+    }
+  }
+}

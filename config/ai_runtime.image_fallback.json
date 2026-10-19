@@ -1,0 +1,29 @@
+{
+  "schema_version": 2,
+  "defaults": {
+    "timeout_seconds": 180,
+    "max_retries": 1
+  },
+  "text": {
+    "enabled": false
+  },
+  "image": {
+    "enabled": true,
+    "api_key_env": "AI_DAILY_IMAGE_FALLBACK_API_KEY",
+    "base_url_env": "AI_DAILY_IMAGE_FALLBACK_BASE_URL",
+    "model_env": "AI_DAILY_IMAGE_FALLBACK_MODEL",
+    "model": "gpt-image-2-vip",
+    "endpoint_path": "images/generations",
+    "timeout_seconds": 180,
+    "request_defaults": {
+      "size": "1920x1080",
+      "quality": "high",
+      "output_format": "png",
+      "response_format": "url"
+    },
+    "response_url": {
+      "allowed_host_suffixes": ["aitohumanize.com"],
+      "max_bytes": 33554432
+    }
+  }
+}

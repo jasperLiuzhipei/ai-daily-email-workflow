@@ -15,6 +15,7 @@ from pathlib import Path
 
 from ai_daily_common import default_imagegen_output_root, default_research_image_manifest_path
 from find_latest_imagegen_output import FindImagegenError, image_candidates
+from render_ai_daily_email import DEFAULT_THEME
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -121,6 +122,8 @@ def build_stage_cmd(args: argparse.Namespace, image_source: Path) -> list[str]:
         cmd.extend(["--quality-decision", args.quality_decision])
     if args.comparison_notes:
         cmd.extend(["--comparison-notes", args.comparison_notes])
+    if args.editorial_review:
+        cmd.extend(["--editorial-review", str(args.editorial_review)])
     if args.source_kind == "imagegen":
         cmd.extend(
             [
@@ -181,12 +184,18 @@ def build_email_cmd(args: argparse.Namespace) -> list[str]:
         cmd.extend(["--issue", str(args.issue)])
     if args.no_write_ledger:
         cmd.append("--no-write-ledger")
+    if args.disable_feedback:
+        cmd.append("--disable-feedback")
     if args.source_kind == "provided":
         cmd.append("--allow-provided-research-image")
     if args.allow_candidate_image_provider:
         cmd.append("--allow-candidate-image-provider")
     if args.provider_registry:
         cmd.extend(["--image-provider-registry", str(args.provider_registry)])
+    if args.content_sections:
+        cmd.extend(["--content-sections", str(args.content_sections)])
+    if args.editorial_policy:
+        cmd.extend(["--editorial-policy", str(args.editorial_policy)])
     return cmd
 
 
@@ -212,18 +221,26 @@ def main() -> None:
     parser.add_argument("--quality-decision", choices=["approved", "pending", "rejected"])
     parser.add_argument("--comparison-notes", help="Manual A/B comparison notes for non-baseline providers.")
     parser.add_argument(
+        "--editorial-review",
+        type=Path,
+        help="Completed structured research-image review required for --quality-decision approved.",
+    )
+    parser.add_argument(
         "--allow-candidate-image-provider",
         action="store_true",
         help="Build a non-production comparison HTML with a candidate provider image.",
     )
-    parser.add_argument("--theme", default="clay_orange")
+    parser.add_argument("--theme", default=DEFAULT_THEME)
     parser.add_argument("--news-layout", default="paper")
     parser.add_argument("--output", type=Path, help="Output HTML path.")
     parser.add_argument("--normalized-output", type=Path, help="Normalized enriched JSON output path.")
     parser.add_argument("--series", choices=["trial", "official", "none"], default="trial")
     parser.add_argument("--issue", type=int, help="Override issue number.")
     parser.add_argument("--issue-ledger", type=Path, default=Path("daily_runs") / "issue_ledger.json")
+    parser.add_argument("--content-sections", type=Path, help="Content section registry passed to the HTML builder.")
+    parser.add_argument("--editorial-policy", type=Path, help="Editorial policy passed to the HTML builder.")
     parser.add_argument("--no-write-ledger", action="store_true")
+    parser.add_argument("--disable-feedback", action="store_true")
     parser.add_argument("--max-bytes", type=int, default=1_000_000)
     args = parser.parse_args()
     apply_default_paths(args)
@@ -233,7 +250,10 @@ def main() -> None:
         run_step(build_stage_cmd(args, image_source))
         run_step(build_verify_cmd(args))
         run_step(build_email_cmd(args))
-        run_step([sys.executable, script_path("validate_ai_daily_content.py"), str(args.normalized_output)])
+        validate_cmd = [sys.executable, script_path("validate_ai_daily_content.py"), str(args.normalized_output)]
+        if args.editorial_policy:
+            validate_cmd.extend(["--editorial-policy", str(args.editorial_policy)])
+        run_step(validate_cmd)
     except (OSError, subprocess.CalledProcessError, FinalizeError) as exc:
         raise SystemExit(f"Finalize failed: {exc}") from exc
 

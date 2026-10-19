@@ -1,0 +1,43 @@
+{
+  "version": "event-editorial-v3.1",
+  "weights": {
+    "change": 30,
+    "impact": 25,
+    "reader_value": 25,
+    "learning_value": 20
+  },
+  "publish_threshold": 60,
+  "deep_threshold": 85,
+  "exceptional_review_threshold": 95,
+  "workers": 4,
+  "max_candidates": 300,
+  "source_chars": 12000,
+  "audience": "产品、研发、用户运营与内部AI提效；兼顾会改变这些读者判断的重要产业与科研进展。",
+  "runtime_budget_seconds": 1800,
+  "max_api_requests": 650,
+  "material_cache_ttl_seconds": 21600,
+  "shared_material_cache": "daily_runs/.cache/event_materials",
+  "quiet_day": {
+    "enabled": false,
+    "min_news_trigger": 3,
+    "thresholds": [
+      65,
+      60
+    ],
+    "max_supplemental_news": 4,
+    "catchup_hours": 72,
+    "recovery_max_events": 12,
+    "recovery_max_urls": 3,
+    "recovery_budget_seconds": 180
+  },
+  "admission_contract": "value-evidence-v3",
+  "brief_value_floor": 60,
+  "news_budget": {
+    "enabled": true,
+    "normal_min": 12,
+    "normal_max": 15,
+    "hard_max": 20,
+    "max_catchup": 2,
+    "expansion_score": 85
+  }
+}

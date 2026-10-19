@@ -1,0 +1,18 @@
+[Unit]
+Description=Auto-publish AI Daily only after holiday editorial and visual quality gates
+After=network-online.target time-sync.target ai-daily-prepare.service
+Wants=network-online.target time-sync.target
+
+[Service]
+Type=oneshot
+User=ths
+Group=ths
+WorkingDirectory=/home/ths/ai-daily
+EnvironmentFile=/home/ths/ai-daily/ai_daily_workflow/.env
+Environment=PYTHONUNBUFFERED=1
+# Quality review is deliberately pinned to the stronger route.  If this route
+# is unavailable, the script exits before invoking the SMTP sender.
+Environment=AI_DAILY_AUTO_QA_MODEL=gpt-5.6-sol
+ExecStart=/home/ths/ai-daily/.venv/bin/python /home/ths/ai-daily/ai_daily_workflow/scripts/holiday_auto_publish.py --workspace /home/ths/ai-daily
+UMask=0077
+

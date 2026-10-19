@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "default_profile": "balanced_product_ops",
+  "profiles": {
+    "balanced_product_ops": {
+      "name": "产品、用户运营与运营中台",
+      "reader_preference_by_group": {
+        "methodology": 100,
+        "enterprise_integration": 90,
+        "developer_tool": 88,
+        "consumer_entry": 86,
+        "security_boundary": 84,
+        "cost_governance": 82,
+        "creative_ops": 80,
+        "model_release": 70,
+        "usage_research": 68,
+        "governance_risk": 64,
+        "inference_speed": 56,
+        "general_router": 55,
+        "agent_memory": 50,
+        "research_frontier": 48,
+        "media_product": 42,
+        "other": 45
+      },
+      "title_adjustments": [
+        {
+          "terms": ["prompt", "提示词", "评估"],
+          "delta": 12,
+          "reason": "技术分析与提示词/评估偏好"
+        },
+        {
+          "terms": ["openclaw"],
+          "delta": 14,
+          "reason": "团队已有真实使用"
+        },
+        {
+          "terms": ["cursor"],
+          "delta": 8,
+          "reason": "AI Coding 与工作流入口"
+        },
+        {
+          "terms": ["redknot", "小红书"],
+          "delta": -8,
+          "reason": "当前职能转译距离较远"
+        },
+        {
+          "terms": ["everos"],
+          "delta": -10,
+          "reason": "当前职能转译距离较远"
+        }
+      ]
+    },
+    "product": {
+      "name": "产品",
+      "reader_preference_by_group": {
+        "consumer_entry": 92,
+        "model_release": 78,
+        "developer_tool": 90,
+        "usage_research": 76
+      }
+    },
+    "user_operations": {
+      "name": "用户运营",
+      "reader_preference_by_group": {
+        "consumer_entry": 92,
+        "creative_ops": 90,
+        "usage_research": 82,
+        "methodology": 88
+      }
+    },
+    "operations_platform": {
+      "name": "运营中台 / 内部 AI 提效",
+      "reader_preference_by_group": {
+        "enterprise_integration": 96,
+        "methodology": 98,
+        "security_boundary": 90,
+        "cost_governance": 88,
+        "developer_tool": 90
+      }
+    }
+  }
+}

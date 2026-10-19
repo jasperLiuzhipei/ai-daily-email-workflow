@@ -68,6 +68,12 @@ def item_urls(item: dict[str, Any]) -> set[str]:
         if isinstance(value, str):
             values.append(value)
     links = item.get("links")
+    # Event merges preserve observed aliases so coverage does not invent a
+    # missing story for each syndicated article. Send admission is checked
+    # separately against the approved primary URLs, not these discovery aliases.
+    aliases = item.get('coverage_source_urls')
+    if isinstance(aliases, list):
+        values.extend(v for v in aliases if isinstance(v, str))
     if isinstance(links, list):
         for link in links:
             if isinstance(link, dict) and isinstance(link.get("url"), str):

@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "editorial_engine": "event_v2",
+  "event_editorial_required_from": "2026-09-19",
+  "freshness": {
+    "max_lookback_hours": 96,
+    "news_lookback_hours": 48,
+    "research_lookback_hours": 72,
+    "gap_audit_enabled": true
+  },
+  "backlog": {
+    "enabled": true,
+    "lookback_days": 4,
+    "news_min_score": 60,
+    "research_min_score": 60,
+    "max_recalled_candidates": 24
+  },
+  "selection": {
+    "research_count": 1,
+    "max_news_count": null
+  },
+  "reading": {
+    "soft_budget_minutes": 10,
+    "research_minutes": 3.0,
+    "news_minutes": {
+      "default": 0.9,
+      "complex_groups": [
+        "methodology",
+        "security_boundary",
+        "enterprise_integration",
+        "infrastructure"
+      ],
+      "complex_minutes": 1.2,
+      "standard_groups": [
+        "model_release",
+        "consumer_entry",
+        "developer_tool",
+        "creative_ops"
+      ],
+      "standard_minutes": 1.0
+    }
+  },
+  "model_update_priority": {
+    "version": "model-priority-v1-2026-09-16",
+    "prior_basis": "User-directed editorial baseline, not measured popularity; review periodically. Unknown means unestablished in this registry, not proven unpopular.",
+    "reach_priors": {
+      "established": {
+        "OpenAI / GPT": [
+          "openai",
+          "chatgpt",
+          "gpt"
+        ],
+        "Google / Gemini": [
+          "google",
+          "gemini",
+          "谷歌"
+        ],
+        "Anthropic / Claude": [
+          "anthropic",
+          "claude"
+        ],
+        "Qwen": [
+          "qwen",
+          "千问",
+          "通义"
+        ],
+        "Hunyuan": [
+          "hunyuan",
+          "混元"
+        ],
+        "DeepSeek": [
+          "deepseek"
+        ]
+      },
+      "specialist": {
+        "StepFun / StepAudio": [
+          "stepfun",
+          "stepaudio",
+          "阶跃星辰"
+        ]
+      }
+    },
+    "score_caps": {
+      "minor": 69,
+      "unusable_source": 69,
+      "routine_unestablished": 72,
+      "routine_established": 76,
+      "substantive_unverified": 79,
+      "major_verified": 96
+    }
+  },
+  "source_verification": {
+    "enabled": true,
+    "max_candidates": 24,
+    "workers": 4,
+    "timeout_seconds": 12,
+    "max_bytes": 1500000,
+    "max_chars": 16000,
+    "official_hosts": [
+      "qwen.ai",
+      "qwenlm.github.io",
+      "github.blog",
+      "openai.com",
+      "x.ai",
+      "developer.nvidia.com",
+      "anthropic.com",
+      "claude.com",
+      "blog.google",
+      "deepmind.google",
+      "ai.google.dev",
+      "ai.meta.com",
+      "microsoft.com",
+      "research.google",
+      "api-docs.deepseek.com",
+      "hunyuan.tencent.com"
+    ],
+    "engineering_hosts": [
+      "github.blog",
+      "anthropic.com",
+      "openai.com",
+      "developer.nvidia.com",
+      "claude.com",
+      "microsoft.com",
+      "research.google"
+    ],
+    "featured_rank_max": 15,
+    "bestblogs_featured_min_score": 90
+  },
+  "coverage_review": {
+    "enabled": false,
+    "required_from": "2026-09-19",
+    "policy_version": "high-value-coverage-v2",
+    "omission_policy": "advisory",
+    "require_explicit_omission_reason": true
+  }
+}

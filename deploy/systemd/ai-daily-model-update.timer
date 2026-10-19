@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh AI Daily models weekly after publication
+
+[Timer]
+OnCalendar=Sun *-*-* 15:30:00 Asia/Shanghai
+RandomizedDelaySec=10min
+Persistent=true
+Unit=ai-daily-model-update.service
+
+[Install]
+WantedBy=timers.target

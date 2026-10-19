@@ -12,10 +12,14 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import json
 import os
 import smtplib
+import tempfile
+from datetime import datetime, timezone
 from email import policy
 from email.parser import BytesParser
+from email.utils import formataddr, getaddresses
 from pathlib import Path
 
 from email_recipients import (
@@ -44,6 +48,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--to", action="append", default=[], help="Extra recipient. Can be repeated.")
     parser.add_argument("--from-addr", default=env_value("AI_DAILY_FROM_ADDR"), help="Envelope/header From.")
+    parser.add_argument(
+        "--from-name",
+        default=env_value("AI_DAILY_FROM_NAME", ""),
+        help="Optional display name for the From header. SMTP delivery still uses --from-addr.",
+    )
     parser.add_argument("--smtp-host", default=env_value("AI_DAILY_SMTP_HOST"), help="SMTP host.")
     parser.add_argument("--smtp-port", type=int, default=int(env_value("AI_DAILY_SMTP_PORT", "465")), help="SMTP port.")
     parser.add_argument(
@@ -55,6 +64,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--smtp-user", default=env_value("AI_DAILY_SMTP_USER"), help="SMTP username.")
     parser.add_argument("--smtp-password", default=env_value("AI_DAILY_SMTP_PASSWORD"), help="SMTP password or auth token.")
     parser.add_argument("--ask-password", action="store_true", help="Prompt for SMTP password at runtime.")
+    parser.add_argument(
+        "--delivery-state",
+        type=Path,
+        help="Persistent per-recipient send state. Successful personalized deliveries are skipped on retry.",
+    )
     parser.add_argument("--send", action="store_true", help="Actually send. Without this flag, only dry-run checks.")
     return parser.parse_args()
 
@@ -64,6 +78,11 @@ def set_header(msg, key: str, value: str) -> None:
         msg.replace_header(key, value)
     else:
         msg[key] = value
+
+
+def formatted_from_header(from_addr: str, from_name: str | None) -> str:
+    """Make a display header without changing the SMTP envelope address."""
+    return formataddr((from_name.strip(), from_addr)) if from_name and from_name.strip() else from_addr
 
 
 def count_inline_images(msg) -> int:
@@ -81,9 +100,135 @@ def html_has_cid_images(msg) -> bool:
     return False
 
 
-def send_message(args: argparse.Namespace, msg, recipient_emails: list[str]) -> None:
+def personalized_message_paths(eml_path: Path) -> list[Path]:
+    manifest_path = eml_path.parent / "manifest.json"
+    if not manifest_path.exists():
+        return []
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RecipientError(f"Invalid email package manifest: {manifest_path}") from exc
+    delivery = manifest.get("personalized_delivery")
+    if not isinstance(delivery, dict) or not delivery.get("enabled"):
+        return []
+    entries = delivery.get("messages")
+    if not isinstance(entries, list) or not entries:
+        raise RecipientError("Personalized delivery is enabled but the package contains no messages.")
+    paths: list[Path] = []
+    package_dir = eml_path.parent.resolve()
+    for index, entry in enumerate(entries, start=1):
+        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+            raise RecipientError(f"Invalid personalized message entry: {index}")
+        candidate = (package_dir / entry["path"]).resolve()
+        if candidate.parent != (package_dir / "messages").resolve() or not candidate.exists():
+            raise RecipientError(f"Invalid personalized message path: {entry['path']}")
+        paths.append(candidate)
+    if delivery.get("message_count") != len(paths):
+        raise RecipientError("Personalized message count does not match the package manifest.")
+    return paths
+
+
+def message_recipient(msg) -> str:
+    addresses = [email for _, email in getaddresses(msg.get_all("To", [])) if email]
+    if len(addresses) != 1:
+        raise RecipientError("Each personalized EML must contain exactly one To address.")
+    return addresses[0]
+
+
+def load_delivery_messages(eml_path: Path, delivery: dict) -> tuple[list[tuple[object, list[str]]], bool]:
+    paths = personalized_message_paths(eml_path)
+    expected = {email.lower() for email in email_only(delivery["recipients"])}
+    if not paths:
+        msg = BytesParser(policy=policy.SMTP).parsebytes(eml_path.read_bytes())
+        return [(msg, email_only(delivery["recipients"]))], False
+
+    messages: list[tuple[object, list[str]]] = []
+    actual: set[str] = set()
+    for path in paths:
+        msg = BytesParser(policy=policy.SMTP).parsebytes(path.read_bytes())
+        recipient = message_recipient(msg)
+        normalized = recipient.lower()
+        if normalized in actual:
+            raise RecipientError(f"Duplicate personalized recipient: {recipient}")
+        actual.add(normalized)
+        messages.append((msg, [recipient]))
+    if actual != expected:
+        raise RecipientError("Personalized EML recipients do not match the frozen recipient snapshot.")
+    return messages, True
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def write_json_atomic(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        json.dump(data, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+        temp_path = Path(handle.name)
+    temp_path.replace(path)
+
+
+def load_delivery_state(path: Path | None, subject: str) -> dict:
+    if path is None or not path.exists():
+        return {
+            "schema_version": 1,
+            "subject": subject,
+            "created_at": utc_now(),
+            "updated_at": utc_now(),
+            "sent": {},
+            "refused": {},
+        }
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RecipientError(f"Invalid SMTP delivery state: {path}") from exc
+    if not isinstance(state, dict) or state.get("schema_version") != 1:
+        raise RecipientError(f"Unsupported SMTP delivery state: {path}")
+    if state.get("subject") != subject:
+        raise RecipientError(
+            f"SMTP delivery state subject mismatch: {state.get('subject')!r} != {subject!r}"
+        )
+    if not isinstance(state.get("sent"), dict) or not isinstance(state.get("refused"), dict):
+        raise RecipientError(f"Invalid SMTP delivery state records: {path}")
+    return state
+
+
+def save_delivery_state(path: Path | None, state: dict) -> None:
+    if path is None:
+        return
+    state["updated_at"] = utc_now()
+    write_json_atomic(path, state)
+
+
+def send_messages(
+    args: argparse.Namespace,
+    messages: list[tuple[object, list[str]]],
+    *,
+    subject: str,
+) -> dict:
     if not args.smtp_host:
         raise SystemExit("Send failed: missing --smtp-host or AI_DAILY_SMTP_HOST.")
+
+    state_path = args.delivery_state.resolve() if args.delivery_state else None
+    state = load_delivery_state(state_path, subject)
+    sent_records = state["sent"]
+    refused_records = state["refused"]
+    current_recipients = {
+        email.lower()
+        for _, recipient_emails in messages
+        for email in recipient_emails
+    }
+    skipped = 0
+    sent_now = 0
 
     password = args.smtp_password
     if args.ask_password and not password:
@@ -101,7 +246,49 @@ def send_message(args: argparse.Namespace, msg, recipient_emails: list[str]) -> 
             server.ehlo()
         if args.smtp_user:
             server.login(args.smtp_user, password or "")
-        server.send_message(msg, from_addr=args.from_addr, to_addrs=recipient_emails)
+        for msg, recipient_emails in messages:
+            normalized = [email.lower() for email in recipient_emails]
+            if normalized and all(email in sent_records for email in normalized):
+                skipped += len(normalized)
+                continue
+            try:
+                refused = server.send_message(msg, from_addr=args.from_addr, to_addrs=recipient_emails)
+            except smtplib.SMTPRecipientsRefused as exc:
+                refused = exc.recipients
+            if refused:
+                attempted_at = utc_now()
+                for email, response in refused.items():
+                    code, detail = response
+                    refused_records[email.lower()] = {
+                        "attempted_at": attempted_at,
+                        "code": int(code),
+                        "message": detail.decode("utf-8", errors="replace")
+                        if isinstance(detail, bytes)
+                        else str(detail),
+                    }
+                save_delivery_state(state_path, state)
+                continue
+            sent_at = utc_now()
+            for email in normalized:
+                sent_records[email] = {"sent_at": sent_at}
+                refused_records.pop(email, None)
+                sent_now += 1
+            save_delivery_state(state_path, state)
+
+    unresolved = sorted(email for email in current_recipients if email not in sent_records)
+    state["completed_at"] = utc_now() if not unresolved else None
+    save_delivery_state(state_path, state)
+    return {
+        "sent_now": sent_now,
+        "skipped": skipped,
+        "unresolved": unresolved,
+        "state_path": state_path,
+        "refused": {
+            email: refused_records[email]
+            for email in unresolved
+            if email in refused_records
+        },
+    }
 
 
 def main() -> None:
@@ -123,28 +310,33 @@ def main() -> None:
     except RecipientError as exc:
         raise SystemExit(f"Send failed: {exc}") from exc
 
-    msg = BytesParser(policy=policy.SMTP).parsebytes(eml_path.read_bytes())
     recipients = delivery["recipients"]
-    if recipients:
-        to_addrs = formatted_addresses(recipients)
-        recipient_emails = email_only(recipients)
-        set_header(msg, "To", ", ".join(to_addrs))
-    else:
-        recipient_emails = []
-        to_addrs = []
+    to_addrs = formatted_addresses(recipients)
+    recipient_emails = email_only(recipients)
 
     if not recipient_emails:
         raise SystemExit("Send failed: no recipients. Use a recipient group, snapshot, or --to.")
     if not args.from_addr:
         raise SystemExit("Send failed: missing --from-addr or AI_DAILY_FROM_ADDR.")
 
-    set_header(msg, "From", args.from_addr)
+    try:
+        messages, personalized = load_delivery_messages(eml_path, delivery)
+    except RecipientError as exc:
+        raise SystemExit(f"Send failed: {exc}") from exc
+    from_header = formatted_from_header(args.from_addr, args.from_name)
+    for msg, _ in messages:
+        set_header(msg, "From", from_header)
+    if not personalized:
+        set_header(messages[0][0], "To", ", ".join(to_addrs))
+
+    first_message = messages[0][0]
 
     print("AI Daily SMTP send check")
     print(f"EML: {eml_path}")
-    print(f"Subject: {msg.get('Subject')}")
-    print(f"From: {msg.get('From')}")
+    print(f"Subject: {first_message.get('Subject')}")
+    print(f"From: {first_message.get('From')}")
     print(f"Recipients: {len(recipient_emails)}")
+    print(f"Delivery mode: {'personalized one-to-one' if personalized else 'single message'}")
     group = delivery.get("recipient_group")
     if group:
         print(f"Recipient group: {group['name']} ({group['id']} v{group['version']})")
@@ -152,15 +344,15 @@ def main() -> None:
     for address in to_addrs:
         if address:
             print(f"- {address}")
-    print(f"HTML has cid: {html_has_cid_images(msg)}")
-    print(f"Inline images: {count_inline_images(msg)}")
+    print(f"HTML has cid: {html_has_cid_images(first_message)}")
+    print(f"Inline images: {count_inline_images(first_message)}")
 
     if not args.send:
         print("Dry-run only. Add --send after SMTP settings are confirmed.")
         return
 
     try:
-        send_message(args, msg, recipient_emails)
+        report = send_messages(args, messages, subject=str(first_message.get("Subject") or ""))
     except smtplib.SMTPAuthenticationError as exc:
         raise SystemExit(f"Send failed: SMTP authentication failed: {exc.smtp_code} {exc.smtp_error!r}") from exc
     except smtplib.SMTPRecipientsRefused as exc:
@@ -169,7 +361,16 @@ def main() -> None:
         raise SystemExit(f"Send failed: SMTP error: {exc.smtp_code} {exc.smtp_error!r}") from exc
     except OSError as exc:
         raise SystemExit(f"Send failed: network/connection error: {exc}") from exc
-    print("Sent.")
+    if report["state_path"]:
+        print(f"Delivery state: {report['state_path']}")
+    print(f"Sent now: {report['sent_now']}; skipped already sent: {report['skipped']}.")
+    if report["unresolved"]:
+        raise SystemExit(
+            "Send incomplete: unresolved recipients: "
+            + ", ".join(report["unresolved"])
+            + f". Details: {report['refused']!r}"
+        )
+    print(f"Delivery complete for {len(messages)} message(s).")
 
 
 if __name__ == "__main__":

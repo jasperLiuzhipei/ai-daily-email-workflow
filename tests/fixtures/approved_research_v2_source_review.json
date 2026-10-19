@@ -1,0 +1,69 @@
+{
+  "fixture_kind": "offline_public_source_and_human_authored_mock_review",
+  "paper_fixture": "approved_editorial_v2_2026-10-08.json",
+  "notes": [
+    "Reuse the approved paper from paper_fixture; do not duplicate or modify its accepted wording.",
+    "Source text contains selected public excerpts, not a new fetch or the full article.",
+    "expected_review is a human-authored test response, not a live model review, image approval, or publication receipt.",
+    "The required concepts are specific to this approved example, not topic or count quotas for future research."
+  ],
+  "source": {
+    "title": "ThinkingBox: The Agent Said It Was Done. The Database Disagreed.",
+    "primary_url": "https://huggingface.co/blog/microsoft/thinkingbox",
+    "fetch_status": "fetched",
+    "source_text": "A customer writes in. Her $745 kitchen appliance has been stuck in a courier \"exception\" at a Nashville distribution center, fifteen days past its estimated delivery date. The AI agent does careful work. Nine tool calls: it pulls the order, checks tracking, looks up her customer profile, searches the refund policy twice, confirms no ticket exists, opens one, documents the timeline, and reads the policy correctly; her account segment genuinely does not qualify for late-delivery compensation. Then it closes the ticket as resolved and replies “ Since your query is resolved, is there anything I may assist you with? ” Two things are wrong. The carrier exception is still open, so the required end state was on hold , pending resolution. And the customer never got a real answer to what she actually asked. An AI grader checking tool calls would see nine well-formed ones. The grader checking whether the agent wrote to the database would see that too. The database is what disagrees . That gap is what ThinkingBox measures. Across 507 stateful business workflows, each run 20 times against various LLM models, it grades agents on terminal backend state and side effects. This post covers what we found, what consistency costs, and how to run the benchmark yourself through OpenEnv . You can run this one yourself: the example above is adapted from a benchmark task sandbox_external_retail_group1.py:test_case_ST003_006 , and the executable check that fails is a single field: the ticket's status is solved where the required end state is hold. The full trace is in Appendix D.4, Case 3 of our paper .\n\nA tool call is not an outcome Final responses and valid tool calls are only proxies. An agent can sound correct while leaving the wrong value, changing the wrong record, or creating an extra side effect. Only the records it leaves behind settle the question. The gap is substantial. In a common-set ablation covering 121,680 valid trials across 12 LLM models, 79,853 attempts failed the executable checks. Of those failures, 67.24% still terminated cleanly, invoked a state-changing tool, and reported no final tool error. Executable checks nevertheless found wrong field values in 77.61% of them, unintended extra effects in 43.30%, and missing required effects in 25.36%. Those state-check findings overlap. A trajectory is a claim. Database state is the evidence. Repetition is the trust test. One success is not reliability An agent that processes a refund correctly once and mishandles it the next four times is not a working refund agent. So every task runs 20 independent times , each from an identical clean backend, and we report three different things: Table 1: The three numbers we report, and the question each one answers. Metric What it measures What it answers pass@1 Share of all attempts that succeeded How does it usually do? pass@20 Share of tasks solved at least once in 20 tries Can it ever do this? Breadth. Observed 20/20 Tasks that actually passed all 20 recorded attempts Can it always be correct? We use observed 20/20 in this blog post as the literal count of how many of the 507 tasks passed 20 out of 20. No estimator, no smoothing.\n\nTable 2: ThinkingBox-Bench pass@1 (%) by domain. Each model is evaluated on every task for 20 repeated trials. Bold marks the group leader; underline marks the runner-up. The standard errors for the single attempt score estimates are provided in Table 4 in our ThinkingBox paper . Model Retail (98) Auto insurance (100) Travel (104) Neobank (104) Consulting (101) Overall, task-weighted (507)\n\nCan you depend on the model behind your agent? Figure 3: Breadth and consistency pull apart. Twelve of the eighteen models are shown; six below 33% pass@1 are omitted for legibility. Kimi-K3 has the broadest coverage of any model we tested. It solves 93.89% of the benchmark at least once: 476 of 507 tasks. Only 31 tasks defeat it entirely, the lowest count in the field. On retail workflows it leads outright at 82.24% pass@1, ahead of every proprietary model. Kimi-K3 is also among the least consistent. Just 68 of 507 tasks, 13.41%, succeed in all 20 attempts. Claude Opus 5 inverts this. It solves fewer tasks at least once (79.09%; 106 defeat it entirely) but completes 47.53% of the benchmark on every single attempt. A newer model does not fix this. Claude Opus 5.5 scores higher than Claude Opus 5 on every-attempt average, 67.16% against 66.50%, and solves more tasks at least once. It passes exactly the same number of tasks on all 20 attempts: 241. Half a point of headline accuracy bought no additional dependability at all. Kimi-K3 solves 75 more tasks at least once than Opus 5. Opus 5 solves 173 more tasks consistently than Kimi-K3. If you are choosing a model for work that touches real records, pass@20 is the wrong column to look at."
+  },
+  "expected_review": {
+    "requirements": [
+      {
+        "id": "outcome_problem",
+        "kind": "problem",
+        "requirement": "区分表面有效的调用与符合业务要求的实际结果。",
+        "source_quote": "Final responses and valid tool calls are only proxies. An agent can sound correct while leaving the wrong value, changing the wrong record, or creating an extra side effect.",
+        "paper_quote": "常见评测容易把回复正确、调用格式有效或写入过数据库当作成功，却漏掉写错字段、产生额外副作用和遗漏必要操作。",
+        "covered": true
+      },
+      {
+        "id": "executable_state_check",
+        "kind": "mechanism",
+        "requirement": "解释可执行终态检查怎样发现状态错误，并保留一个具体业务例子。",
+        "source_quote": "the executable check that fails is a single field: the ticket's status is solved where the required end state is hold.",
+        "paper_quote": "原文的配送案例中，Agent查过订单和政策，也建立了工单，但配送异常仍未解除，它就把工单设成“已解决”；真正需要的终态应是“等待处理”。",
+        "covered": true
+      },
+      {
+        "id": "repeated_trials",
+        "kind": "mechanism",
+        "requirement": "解释相同干净起点下的独立重复执行及三种指标读法。",
+        "source_quote": "So every task runs 20 independent times , each from an identical clean backend, and we report three different things:",
+        "paper_quote": "ThinkingBox让Agent在隔离的MCP工具会话中处理有状态业务任务，再用可执行检查核对后台字段和副作用：该改的是否改对，不该动的是否被改动，必要效果是否遗漏。测试覆盖五类业务环境的507项任务，每项都从相同的干净后台独立运行20次，使结果能在相同起点下比较。\n\n作者区分三种读法：pass@1统计所有尝试的平均成功比例；pass@20看一项任务在20次中是否至少成功过一次；observed 20/20则数出实际20次全通过的任务。前两者分别描述平均表现与能力覆盖，最后一项关注这批重复试验中哪些任务始终做对。",
+        "covered": true
+      },
+      {
+        "id": "silent_failure",
+        "kind": "finding",
+        "requirement": "保留表面正常结束仍未完成任务的代表性证据及其分母。",
+        "source_quote": "In a common-set ablation covering 121,680 valid trials across 12 LLM models, 79,853 attempts failed the executable checks. Of those failures, 67.24% still terminated cleanly, invoked a state-changing tool, and reported no final tool error.",
+        "paper_quote": "首先，状态错误常常藏在“正常完成”的执行里。在覆盖12个模型的共同任务测试中，67.24%的失败尝试仍正常结束、调用过修改状态的工具，而且没有报告最终工具错误。终态检查却发现字段值不对、产生额外效果或遗漏必要效果，说明仅凭Agent结束语和工具是否报错，会把相当一部分失败误当完成。",
+        "covered": true
+      },
+      {
+        "id": "breadth_vs_consistency",
+        "kind": "finding",
+        "requirement": "用代表性模型对照说明任务覆盖和重复稳定性不等同。",
+        "source_quote": "Just 68 of 507 tasks, 13.41%, succeed in all 20 attempts. Claude Opus 5 inverts this. It solves fewer tasks at least once (79.09%; 106 defeat it entirely) but completes 47.53% of the benchmark on every single attempt.",
+        "paper_quote": "其次，覆盖更多任务不等于重复表现更稳。在同一套507项任务中，Kimi-K3有476项至少成功一次，但20次全成功的只有68项；Claude Opus 5至少成功一次的为401项，却有241项在20次中全部成功。前者能做成的任务种类更多，后者在这批测试中能反复做对的任务更多，两种排名回答的是不同问题。",
+        "covered": true
+      },
+      {
+        "id": "observed_scope",
+        "kind": "boundary",
+        "requirement": "说明20/20是记录到的测试观察，不是未来稳定性的保证。",
+        "source_quote": "We use observed 20/20 in this blog post as the literal count of how many of the 507 tasks passed 20 out of 20. No estimator, no smoothing.",
+        "paper_quote": "这些结果来自所测模型、五类模拟业务环境及指定运行条件，不能直接外推到所有生产流程。20/20是本次20次独立尝试全部通过的观察结果，不是未来永不出错的保证；至少成功一次也不能被解释成稳定成功。",
+        "covered": true
+      }
+    ],
+    "editorial_issues": []
+  }
+}

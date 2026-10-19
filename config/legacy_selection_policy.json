@@ -1,0 +1,195 @@
+{
+  "schema_version": 1,
+  "scoring": {
+    "weights": {
+      "reader_preference": 30,
+      "industry_impact": 30,
+      "translation_value": 25,
+      "source_reliability": 10,
+      "freshness_diversity": 5
+    },
+    "bonuses": {
+      "technique_sparse": 5,
+      "aihot_daily_editorial": 4,
+      "foundation_model_priority": 6,
+      "controversy_heat_tiers": [
+        {
+          "min_heat": 85,
+          "bonus": 8
+        },
+        {
+          "min_heat": 72,
+          "bonus": 6
+        },
+        {
+          "min_heat": 60,
+          "bonus": 3
+        }
+      ]
+    },
+    "penalties": {
+      "military_geo_risk": 22
+    }
+  },
+  "freshness": {
+    "news_lookback_hours": 48,
+    "research_lookback_hours": 72,
+    "allow_wide_news_window_for_backfill_only": true,
+    "gap_audit_enabled": true,
+    "gap_audit_min_score": 86
+  },
+  "selection": {
+    "research_count": 1,
+    "min_news_count": 5,
+    "max_news_count": null,
+    "news_count_mode": "quality_threshold",
+    "enforce_group_limits": false,
+    "research_min_score": 65,
+    "research_min_internal_relevance": 15,
+    "scope_limited_research_relevance_cap": 10,
+    "secondary_news_score_cap": 79,
+    "roundup_news_score_cap": 0,
+    "news_min_score": 76,
+    "news_auto_include_score_threshold": 76,
+    "news_fallback_min_score": 70,
+    "news_expansion_score_threshold": 82,
+    "news_over_budget_score_threshold": 90,
+    "news_exceptional_score_threshold": 94,
+    "group_limits": {
+      "consumer_entry": 2,
+      "methodology": 2,
+      "model_release": 2,
+      "security_boundary": 2,
+      "developer_tool": 1
+    },
+    "excluded_groups": [
+      "general_router"
+    ],
+    "research_empty_slot_fallback_min_score": 85,
+    "research_empty_slot_fallback_min_internal_relevance": 12,
+    "research_empty_slot_fallback_min_source_reliability": 80,
+    "search_augmented_content_integrity_relevance_bonus": 9,
+    "reported_benchmark_research_score_cap": 45,
+    "secondary_research_score_cap": 84,
+    "high_impact_unverified_signal_min_score": 72
+  },
+  "reading": {
+    "soft_budget_minutes": 10,
+    "research_minutes": 3.0,
+    "news_minutes": {
+      "default": 0.9,
+      "complex_groups": [
+        "methodology",
+        "security_boundary",
+        "enterprise_integration",
+        "infrastructure"
+      ],
+      "complex_minutes": 1.2,
+      "standard_groups": [
+        "model_release",
+        "consumer_entry",
+        "developer_tool",
+        "creative_ops"
+      ],
+      "standard_minutes": 1.0
+    }
+  },
+  "editorial_engine": "legacy_v1",
+  "event_editorial_required_from": "2026-09-19",
+  "backlog": {
+    "enabled": true,
+    "lookback_days": 7,
+    "news_min_score": 80,
+    "research_min_score": 65,
+    "max_recalled_candidates": 12
+  },
+  "model_update_priority": {
+    "version": "model-priority-v1-2026-09-16",
+    "prior_basis": "User-directed editorial baseline, not measured popularity; review periodically. Unknown means unestablished in this registry, not proven unpopular.",
+    "reach_priors": {
+      "established": {
+        "OpenAI / GPT": [
+          "openai",
+          "chatgpt",
+          "gpt"
+        ],
+        "Google / Gemini": [
+          "google",
+          "gemini",
+          "谷歌"
+        ],
+        "Anthropic / Claude": [
+          "anthropic",
+          "claude"
+        ],
+        "Qwen": [
+          "qwen",
+          "千问",
+          "通义"
+        ],
+        "Hunyuan": [
+          "hunyuan",
+          "混元"
+        ],
+        "DeepSeek": [
+          "deepseek"
+        ]
+      },
+      "specialist": {
+        "StepFun / StepAudio": [
+          "stepfun",
+          "stepaudio",
+          "阶跃星辰"
+        ]
+      }
+    },
+    "score_caps": {
+      "minor": 69,
+      "unusable_source": 69,
+      "routine_unestablished": 72,
+      "routine_established": 76,
+      "substantive_unverified": 79,
+      "major_verified": 96
+    }
+  },
+  "source_verification": {
+    "enabled": true,
+    "max_candidates": 24,
+    "workers": 4,
+    "timeout_seconds": 12,
+    "max_bytes": 1500000,
+    "max_chars": 16000,
+    "official_hosts": [
+      "qwen.ai",
+      "qwenlm.github.io",
+      "github.blog",
+      "openai.com",
+      "anthropic.com",
+      "claude.com",
+      "blog.google",
+      "deepmind.google",
+      "ai.google.dev",
+      "ai.meta.com",
+      "microsoft.com",
+      "research.google",
+      "api-docs.deepseek.com",
+      "hunyuan.tencent.com"
+    ],
+    "engineering_hosts": [
+      "github.blog",
+      "anthropic.com",
+      "openai.com",
+      "claude.com",
+      "microsoft.com",
+      "research.google"
+    ],
+    "featured_rank_max": 15,
+    "bestblogs_featured_min_score": 90
+  },
+  "coverage_review": {
+    "enabled": true,
+    "required_from": "2026-09-19",
+    "policy_version": "high-value-coverage-v1",
+    "require_explicit_omission_reason": true
+  }
+}

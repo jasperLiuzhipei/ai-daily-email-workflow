@@ -1,0 +1,35 @@
+#!/bin/zsh
+set -euo pipefail
+
+if (( $# > 1 )); then
+  print -u2 '用法：ai-daily-preview [YYYY-MM-DD]'
+  exit 2
+fi
+
+run_date="${1:-$(date '+%F')}"
+if ! [[ "$run_date" =~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' ]]; then
+  print -u2 '日期格式应为 YYYY-MM-DD，例如：ai-daily-preview 2026-07-28'
+  exit 2
+fi
+
+server='ths@192.168.2.219'
+remote_root='/home/ths/ai-daily'
+remote_html="${remote_root}/output/ai_daily_email_${run_date}.html"
+local_root="${AI_DAILY_PREVIEW_DIR:-$HOME/Desktop/AI日报预览}"
+local_html="${local_root}/output/ai_daily_email_${run_date}.html"
+ssh_options=(-o BatchMode=yes -o ConnectTimeout=8)
+
+if ! ssh "${ssh_options[@]}" "$server" "test -f '$remote_html'"; then
+  print -u2 "尚未找到 ${run_date} 的日报预览。工作日生成将在 08:30 开始；可稍后重试。"
+  exit 1
+fi
+
+mkdir -p "${local_root}/output" "${local_root}/assets/email"
+if ssh "${ssh_options[@]}" "$server" "test -d '${remote_root}/assets/email/${run_date}'"; then
+  rsync -az -e "ssh -o BatchMode=yes -o ConnectTimeout=8" \
+    "${server}:${remote_root}/assets/email/${run_date}/" \
+    "${local_root}/assets/email/${run_date}/"
+fi
+scp "${ssh_options[@]}" "$server:$remote_html" "$local_html"
+open "$local_html"
+print "已打开 ${run_date} 的日报预览：${local_html}"

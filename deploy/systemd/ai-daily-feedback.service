@@ -1,0 +1,21 @@
+[Unit]
+Description=AI Daily feedback and click-tracking service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ths/ai-daily/ai_daily_workflow
+EnvironmentFile=/home/ths/ai-daily/ai_daily_workflow/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=AI_DAILY_FEEDBACK_HOST=127.0.0.1
+Environment=AI_DAILY_FEEDBACK_PORT=8765
+Environment=AI_DAILY_FEEDBACK_DB=/home/ths/ai-daily/feedback-data/feedback.db
+Environment=AI_DAILY_SEND_LEDGER=/home/ths/ai-daily/daily_runs/send_ledger.json
+ExecStart=/home/ths/ai-daily/.venv/bin/python -m feedback_service.server
+Restart=on-failure
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=default.target

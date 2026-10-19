@@ -1,0 +1,48 @@
+{
+  "version": "newspaper-seven-muted-v3",
+  "base_date": "2026-09-10",
+  "colors": [
+    {
+      "id": "cinnabar",
+      "label": "朱砂红",
+      "color": "#A3473F",
+      "ink": "#A3473F"
+    },
+    {
+      "id": "plum",
+      "label": "梅子紫",
+      "color": "#86536F",
+      "ink": "#86536F"
+    },
+    {
+      "id": "cobalt",
+      "label": "钴蓝",
+      "color": "#4168A2",
+      "ink": "#4168A2"
+    },
+    {
+      "id": "orange",
+      "label": "灰调亮橙",
+      "color": "#D38243",
+      "ink": "#A65C26"
+    },
+    {
+      "id": "iris",
+      "label": "灰调鸢尾紫",
+      "color": "#9580C7",
+      "ink": "#735B9E"
+    },
+    {
+      "id": "diamond",
+      "label": "灰调钻石蓝",
+      "color": "#4C9EC1",
+      "ink": "#2B7596"
+    },
+    {
+      "id": "tiffany",
+      "label": "灰调蒂芙尼蓝",
+      "color": "#5BAAA4",
+      "ink": "#337E79"
+    }
+  ]
+}

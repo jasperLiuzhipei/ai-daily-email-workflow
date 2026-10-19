@@ -179,6 +179,9 @@ def record_run_event(
         event["message"] = message
     if artifacts:
         event["artifacts"] = sorted(artifacts)
+        # Preserve the descriptor observed at this event, even when the current
+        # artifact map advances to a later revision of the same file.
+        event["artifact_snapshots"] = {key: dict(state["artifacts"][key]) for key in artifacts}
     if delivery_channel:
         event["delivery_channel"] = delivery_channel
     state["events"].append(event)

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "enabled": true,
+  "auto_promote": true,
+  "family": "gpt-sol",
+  "max_candidates_per_run": 1,
+  "required_passes": 2,
+  "minimum_pass_interval_hours": 24,
+  "max_calls_per_run": 18,
+  "max_cost_usd_per_run": 2.0,
+  "max_price_ratio": 1.25,
+  "max_latency_ratio": 1.5,
+  "max_call_seconds": 90,
+  "max_completion_tokens": 2000,
+  "max_input_bytes": 24000,
+  "prices_usd_per_million_tokens": {}
+}

@@ -8,6 +8,8 @@ issue numbering, validation, image-path checks, and HTML rendering.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import newspaper_text
 import json
 import shlex
 from copy import deepcopy
@@ -25,10 +27,20 @@ from ai_daily_common import (
     resolve_workspace_path,
     write_json_object,
 )
-from render_ai_daily_email import NEWS_LAYOUTS, THEMES, apply_news_layout, apply_theme, render_email
+from daily_config import DailyConfigError, load_content_sections, load_editorial_policy
+from render_ai_daily_email import (
+    DEFAULT_THEME,
+    NEWS_LAYOUTS,
+    THEMES,
+    apply_news_layout,
+    apply_theme,
+    configure_digest_policy,
+    render_email,
+)
 from validate_ai_daily_content import ValidationError, validate_content
-from verify_research_image_lineage import LineageError, verify_lineage
+from verify_research_image_lineage import LineageError, research_item_from_manifest, verify_lineage
 from image_provider_registry import ImageProviderError
+from email_feedback import remove_feedback
 
 
 WEEKDAYS = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
@@ -48,6 +60,8 @@ DEFAULT_FOOTER = {
     "email": "ai-daily@example.com",
 }
 DEFAULT_EDITOR_SETTINGS = Path(__file__).resolve().parents[1] / "config" / "editor_settings.json"
+DEFAULT_CONTENT_SECTIONS = Path(__file__).resolve().parents[1] / "config" / "content_sections.json"
+DEFAULT_EDITORIAL_POLICY = Path(__file__).resolve().parents[1] / "config" / "editorial_policy.json"
 
 
 class BuildError(Exception):
@@ -76,13 +90,16 @@ def formal_send_command(
     output: Path,
     series: str,
     explicit_issue: int | None,
+    disable_feedback: bool,
 ) -> str:
     """Return the exact guarded prod-send command for a successfully built HTML."""
 
     project_root = Path(__file__).resolve().parents[2]
     runner = Path(__file__).resolve().with_name("run_ai_daily.py")
+    workflow_python = runner.parent.parent / ".venv" / "bin" / "python"
+    interpreter = str(workflow_python) if workflow_python.exists() else "python3"
     command = [
-        "python3",
+        interpreter,
         str(runner),
         "prod",
         "--date",
@@ -96,8 +113,12 @@ def formal_send_command(
         "--send",
         "--confirm-prod",
     ]
+    if not disable_feedback:
+        command.append("--require-feedback")
     if explicit_issue is not None:
         command.extend(["--issue", str(explicit_issue)])
+    if disable_feedback:
+        command.append("--disable-feedback")
     return f"cd {shlex.quote(str(project_root))} && {shlex.join(command)}"
 
 
@@ -182,6 +203,7 @@ def enrich_content(
     issue: int,
     series: str,
     footer_defaults: dict[str, str],
+    editorial_policy: dict[str, Any],
 ) -> dict[str, Any]:
     data = deepcopy(raw)
     date_cn = format_date_cn(run_date)
@@ -192,7 +214,8 @@ def enrich_content(
     data["series"] = series
     data["title"] = f"今日 AI 情报雷达｜{date_cn}"
     data["subtitle"] = make_subtitle(series, issue)
-    data["eyebrow"] = DEFAULT_EYEBROW
+    email_shell = editorial_policy.get("email_shell", {})
+    data["eyebrow"] = str(email_shell.get("eyebrow") or DEFAULT_EYEBROW)
 
     research_items = data.get("research_items")
     if isinstance(research_items, list) and research_items:
@@ -205,8 +228,17 @@ def enrich_content(
         paper = data.get("paper")
         if isinstance(paper, dict):
             paper.setdefault("section_title", "研究前沿")
+            # An empty modern list falls back to the legacy paper everywhere
+            # in the renderer. Canonicalize it before image-manifest lookup too.
+            if research_items == []:
+                data.pop("research_items")
 
-    merge_default_object(data, "news_section", DEFAULT_NEWS_SECTION)
+    configured_news_section = email_shell.get("news_section", {})
+    merge_default_object(
+        data,
+        "news_section",
+        {**DEFAULT_NEWS_SECTION, **(configured_news_section if isinstance(configured_news_section, dict) else {})},
+    )
     merge_default_object(data, "footer", footer_defaults)
     return data
 
@@ -219,6 +251,20 @@ def iter_research_items(data: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(paper, dict):
         return [paper]
     return []
+
+
+def verify_research_image_manifests(
+    data: dict[str, Any], manifest_paths: list[Path], workspace: Path, **options: Any,
+) -> None:
+    """Verify each supplied manifest and require every rendered paper covered."""
+    expected = {id(item) for item in iter_research_items(data)}
+    verified: set[int] = set()
+    for manifest_path in manifest_paths:
+        verify_lineage(data, manifest_path, workspace, **options)
+        item = research_item_from_manifest(data, load_json_object(manifest_path))
+        verified.add(id(item))
+    if verified != expected:
+        raise LineageError("Research image manifests do not cover every rendered research item.")
 
 
 def check_pipeline_rules(data: dict[str, Any], workspace: Path) -> None:
@@ -280,8 +326,20 @@ def main() -> None:
         help="Optional local footer identity JSON. Missing file uses repository-safe defaults.",
     )
     parser.add_argument(
+        "--content-sections",
+        type=Path,
+        default=DEFAULT_CONTENT_SECTIONS,
+        help="Versioned section/category registry for digest rendering.",
+    )
+    parser.add_argument(
+        "--editorial-policy",
+        type=Path,
+        default=DEFAULT_EDITORIAL_POLICY,
+        help="Versioned editorial labels, boundary rules, and email-shell defaults.",
+    )
+    parser.add_argument(
         "--theme",
-        default="clay_orange",
+        default=DEFAULT_THEME,
         choices=sorted(THEMES),
         help="Visual theme name.",
     )
@@ -312,39 +370,57 @@ def main() -> None:
         action="store_true",
         help="Permit a reviewed non-baseline provider for a comparison HTML build; never use this for a production send.",
     )
+    parser.add_argument(
+        "--disable-feedback",
+        action="store_true",
+        help="Omit the rating/comment placeholder from the generated HTML.",
+    )
     parser.add_argument("--image-provider-registry", type=Path, help="Image provider registry path.")
     args = parser.parse_args()
 
     try:
         run_date = parse_run_date(args.date)
+        content_sections = load_content_sections(args.content_sections)
+        editorial_policy = load_editorial_policy(args.editorial_policy)
+        configure_digest_policy(content_sections, editorial_policy)
         ledger = load_ledger(args.issue_ledger)
         issue = assign_issue(ledger, run_date, args.series, args.issue)
+        # Parse and hash the same bytes so cached sends can prove which source
+        # content produced this normalized document and HTML.
+        source_bytes = args.content.read_bytes()
+        raw_content = json.loads(source_bytes)
+        if not isinstance(raw_content, dict):
+            raise JsonObjectError(f"{args.content} must contain a JSON object.")
         data = enrich_content(
-            load_json_object(args.content),
+            raw_content,
             run_date,
             issue,
             args.series,
             load_footer_defaults(args.editor_settings),
+            editorial_policy,
         )
+        data = newspaper_text.configure_content(data, run_date.isoformat())
+        data.setdefault("presentation", {})["source_content_sha256"] = hashlib.sha256(source_bytes).hexdigest()
+        text_only = data.get("presentation", {}).get("mode") == "newspaper_text"
         check_pipeline_rules(data, Path.cwd())
-        if args.require_image_manifest:
+        if args.require_image_manifest and iter_research_items(data) and not text_only:
             manifest_paths = args.image_manifest or [default_research_image_manifest_path(run_date.isoformat())]
-            for manifest_path in manifest_paths:
-                verify_lineage(
-                    data,
-                    manifest_path,
-                    Path.cwd(),
-                    require_imagegen=not args.allow_provided_research_image,
-                    allow_candidate_provider=(
-                        args.allow_candidate_image_provider or args.allow_provided_research_image
-                    ),
-                    provider_registry_path=args.image_provider_registry,
-                )
-        validate_content(data)
+            verify_research_image_manifests(
+                data,
+                manifest_paths,
+                Path.cwd(),
+                require_imagegen=not args.allow_provided_research_image,
+                allow_candidate_provider=(
+                    args.allow_candidate_image_provider or args.allow_provided_research_image
+                ),
+                provider_registry_path=args.image_provider_registry,
+            )
+        validate_content(data, editorial_policy=editorial_policy)
     except (
         json.JSONDecodeError,
         OSError,
         JsonObjectError,
+        DailyConfigError,
         ImageProviderError,
         BuildError,
         LineageError,
@@ -352,23 +428,31 @@ def main() -> None:
     ) as exc:
         raise SystemExit(f"Build failed: {exc}") from exc
 
-    if args.series != "none" and not args.no_write_ledger:
-        write_json_object(args.issue_ledger, ledger)
-
-    if args.normalized_output:
-        write_json_object(args.normalized_output, data)
-
     output = args.output or default_output_path(run_date)
     apply_theme(args.theme)
     apply_news_layout(args.news_layout)
     output.parent.mkdir(parents=True, exist_ok=True)
     render_data = rewrite_local_image_paths_for_output(data, Path.cwd(), output)
-    output.write_text(render_email(render_data), encoding="utf-8")
+    html = newspaper_text.render_email(render_data) if newspaper_text.enabled(run_date.isoformat()) else render_email(render_data)
+    if args.disable_feedback:
+        html = remove_feedback(html)
+    output.write_text(html, encoding="utf-8")
+    if newspaper_text.enabled(run_date.isoformat()):
+        data["presentation"]["html_sha256"] = hashlib.sha256(html.encode("utf-8")).hexdigest()
+        # Bind the readable content to this HTML build. A later JSON-only edit
+        # must not make an older email body appear to have passed fresh checks.
+        data["presentation"]["content_sha256"] = newspaper_text.build_content_signature(data)
+    if args.normalized_output:
+        write_json_object(args.normalized_output, data)
+    # Do not commit an issue or overwrite its normalized snapshot when
+    # rendering fails (for example, a stale reviewed editorial override).
+    if args.series != "none" and not args.no_write_ledger:
+        write_json_object(args.issue_ledger, ledger)
 
     issue_text = "no issue" if args.series == "none" else f"issue {issue}"
     print(f"Wrote {output} ({format_display_date(run_date)}, {issue_text}, theme {args.theme}, news {args.news_layout})")
     print("正式发送命令（正式名单，发送前会要求输入 SMTP 密码）：")
-    print(formal_send_command(run_date, output, args.series, args.issue))
+    print(formal_send_command(run_date, output, args.series, args.issue, args.disable_feedback))
 
 
 if __name__ == "__main__":

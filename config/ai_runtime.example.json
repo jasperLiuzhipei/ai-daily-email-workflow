@@ -1,0 +1,44 @@
+{
+  "schema_version": 2,
+  "defaults": {
+    "api_key_env": "AI_DAILY_API_KEY",
+    "base_url_env": "AI_DAILY_API_BASE_URL",
+    "timeout_seconds": 120,
+    "max_retries": 1
+  },
+  "managed_text_models": {
+    "enabled": false,
+    "state_dir": "../runtime_state/model_updates"
+  },
+  "text": {
+    "enabled": true,
+    "api_key_env": "AI_DAILY_TEXT_API_KEY",
+    "base_url_env": "AI_DAILY_TEXT_BASE_URL",
+    "model_env": "AI_DAILY_TEXT_MODEL",
+    "model": "gpt-6-sol",
+    "fallback_models": [],
+    "endpoint_path": "chat/completions",
+    "request_defaults": {
+      "reasoning_effort": "medium",
+      "max_completion_tokens": 12000,
+      "response_format": {
+        "type": "json_object"
+      }
+    }
+  },
+  "image": {
+    "enabled": true,
+    "api_key_env": "AI_DAILY_IMAGE_API_KEY",
+    "base_url_env": "AI_DAILY_IMAGE_BASE_URL",
+    "model_env": "AI_DAILY_IMAGE_MODEL",
+    "model": "gpt-image-2",
+    "endpoint_path": "images/generations",
+    "timeout_seconds": 180,
+    "request_defaults": {
+      "size": "1920x1080",
+      "quality": "high",
+      "output_format": "png",
+      "response_format": "b64_json"
+    }
+  }
+}

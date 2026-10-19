@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from ai_daily_common import slugify, write_json_object
+from research_image_contract import FIELDS, HandoffError, compile_prompt, compilation_record, load_policy, normalize_handoff
 
 
 BRIDGE_FIELDS = [
@@ -226,121 +227,15 @@ def has_any(text: str, keywords: list[str]) -> bool:
 
 
 def make_palette_guidance(visual: dict[str, str]) -> str:
-    """Return a content-aware color strategy for image generation.
-
-    Research explainers should prioritize a precise technology feel rather than
-    inherit any visual theme from the email shell.
-    """
-    text = visual_text(visual)
-    foundation = (
-        "冷白或浅灰、石墨黑、银灰作为基础，保持高对比、清晰的科技图解感；"
-        "用 2-4 个主色层次组织信息，不要让任何单一色相铺满全图。"
-    )
-
-    if has_any(
-        text,
-        [
-            "risk",
-            "safety",
-            "attack",
-            "hallucination",
-            "boundary",
-            "failure",
-            "风险",
-            "安全",
-            "攻击",
-            "幻觉",
-            "边界",
-            "失败",
-        ],
-    ):
-        accent = "辅色优先使用克制红、暗李子色、石墨和银灰；让风险/边界提示清晰但不刺眼。"
-    elif has_any(
-        text,
-        [
-            "business",
-            "operations",
-            "workflow",
-            "startup",
-            "ceo",
-            "cost",
-            "router",
-            "agent",
-            "业务",
-            "运营",
-            "经营",
-            "创业",
-            "成本",
-            "路由",
-            "中台",
-        ],
-    ):
-        accent = "辅色优先使用深海军蓝、蓝灰、石墨和银灰；只有在表达状态、决策或路径分叉时，才少量使用琥珀色或低饱和珊瑚色。"
-    elif has_any(
-        text,
-        [
-            "model",
-            "architecture",
-            "benchmark",
-            "token",
-            "reasoning",
-            "infrastructure",
-            "模型",
-            "架构",
-            "基准",
-            "评测",
-            "推理",
-            "token",
-            "基础设施",
-        ],
-    ):
-        accent = "辅色可加入蓝灰、靛蓝、银灰、低饱和青色或克制紫色，体现技术结构但不要变成单一冷蓝。"
-    else:
-        accent = "辅色从文章主题中选择，可用深海军蓝、蓝灰、靛蓝、银灰、克制紫色或风险红；色彩必须帮助理解机制和边界。"
-
-    guardrail = (
-        "不要继承邮件主题色。暖色只可作为有意义的小型状态或风险提示，不能默认出现；"
-        "Reject if the image is dominated by orange, blue, or any single hue; low-contrast; or looks like the email template turned into an illustration. "
-        "不要使用绿色作为主色。"
-    )
-    return f"{foundation}{accent}{guardrail}"
+    """Compatibility entrypoint; palette policy has one versioned owner."""
+    return load_policy()["palette"]
 
 
 def make_image_prompt(visual_handoff_raw: str, visual: dict[str, str], _output_hint: str) -> str:
-    title = visual.get("Display Title", "")
-    subtitle = visual.get("Optional Subtitle", "")
-    palette_guidance = make_palette_guidance(visual)
-    return f"""生成一张 1200x630 横版中文研究图解，用于 AI 日报邮件。
-
-主题：{title or "研究前沿"}
-{f"副标题：{subtitle}" if subtitle else ""}
-
-画面目标：
-把下面的 Visual Handoff 转成一张清晰、现代、可读的中文研究解释图。读者应在约三秒内看懂这项研究在解释什么机制，以及它的证据和边界。
-
-画面结构：
-1. 主视觉只讲一个核心机制，不要堆很多模块。
-2. 保留一个小型证据锚点，可以是对照条、简洁实验面板或少量指标卡；默认只表达相对趋势，不写具体数字。
-3. 保留一个边界提示，放在角落或次级区域，不要抢主视觉。
-
-风格要求：
-浅色或中性背景，干净现代，有高对比的 AI 产品感、系统感和研究解释感；配色必须服务论文机制，而不是机械继承日报主题。{palette_guidance}中文标签要短、清晰、字号足够大，适合邮件里阅读。
-
-配色隔离硬约束：
-图片不得复制邮件主题色。Reject if the image is dominated by orange, blue, or any single hue; lacks contrast; or looks like the email template recolored into an illustration rather than a content-specific research explainer. 暖色只能作为有明确语义的少量状态或风险提示，不能作为默认底色或主视觉。
-
-文字要求：
-标题尽量使用“{title or "研究前沿"}”{f"，副标题尽量使用“{subtitle}”" if subtitle else ""}。只使用简体中文短标签，不要长段文字，不要英文大段说明，不要水印。
-
-必须避免：
-不要出现人物、机器人、大脑、来源方或品牌 logo、论文截图、密集表格、复杂曲线；不要把机制画成联网搜索；不要暗示能力万能、流程越长越好，或模型获得了未说明的新知识。
-
-数字证据要求：
-不要自行编造或补全任何百分比、分数、pt 变化、样本数、排名、坐标轴数值或精确指标。只有 Visual Handoff 明确写出“允许使用以下精确数字”时，才可以在图中使用那些数字；否则所有证据面板都只能用高低不同的趋势条、箭头、强弱对比、阶段标签或“较弱 / 部分恢复 / 明显恢复 / 更可靠”等相对表达。
-
-Visual Handoff:
-{visual_handoff_raw}
-"""
+    """Compile structured handoff only; raw Markdown stays in the audit artifact."""
+    if not visual:
+        visual = parse_fields(visual_handoff_raw, list(FIELDS) + VISUAL_FIELDS)
+    return compile_prompt(visual)
 
 
 def main() -> None:
@@ -357,7 +252,7 @@ def main() -> None:
         bridge_raw = section(text, "Daily Email Bridge")
         visual_raw = section(text, "Visual Handoff")
         bridge = parse_fields(bridge_raw, BRIDGE_FIELDS)
-        visual = parse_fields(visual_raw, VISUAL_FIELDS)
+        visual = parse_fields(visual_raw, list(FIELDS) + VISUAL_FIELDS)
         if bridge.get("Target Section", "").strip().lower() != "research":
             raise ParseError("Daily Email Bridge is not a research bridge.")
         if bridge.get("Image Allowed", "").strip().lower() != "true":
@@ -368,7 +263,7 @@ def main() -> None:
         image_path = f"assets/email/{args.date}/{slug}.png"
         paper = make_paper_json(bridge, image_path)
         prompt = make_image_prompt(visual_raw, visual, image_path)
-    except (OSError, ParseError) as exc:
+    except (OSError, ParseError, HandoffError) as exc:
         raise SystemExit(f"Parse failed: {exc}") from exc
 
     artifact = {
@@ -377,6 +272,8 @@ def main() -> None:
         "image_asset_slug": slug,
         "daily_email_bridge": bridge,
         "visual_handoff": visual,
+        "visual_handoff_compact": normalize_handoff(visual),
+        "prompt_compilation": compilation_record(visual, prompt),
         "visual_handoff_raw": visual_raw,
         "imagegen_prompt": prompt,
     }

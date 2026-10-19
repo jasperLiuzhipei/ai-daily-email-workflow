@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "news_date_and_length",
+      "task": "将来源改写为一条中文日报新闻。输出 title、one_liner、why、observation、boundary 五个非空字符串；除 title 外合计不超过 300 字符。必须在 boundary 保留 2026-10-13 和封闭测试的限定。不得增加价格或性能数据。",
+      "source": "虚构评测样本：Atlas Notes 在 2026-10-13 宣布封闭测试版，增加可追溯来源引用和冲突提示。10 月 15 日的文章再次介绍同一功能，没有新发布。仅限获邀团队；尚未公布价格或性能测试。",
+      "required": ["title", "one_liner", "why", "observation", "boundary"],
+      "must_contain": {"boundary": ["2026-10-13", "封闭测试"]},
+      "max_characters": 300
+    },
+    {
+      "id": "research_evidence_boundary",
+      "task": "输出中文研究解读，字段 title、conclusion、problem、mechanism、evidence、insight、boundary 均为非空字符串。说明三阶段机制；保留 evidence 中的 100 和 20%；boundary 必须包含离线、相对、未验证。不得把相对下降写成下降 20 个百分点。",
+      "source": "虚构评测样本：研究在 100 道离线问答题上比较一个基线模型。机制分检索证据、检查冲突、形成结论三个阶段。无依据结论相对基线下降 20%，未报告绝对比例；未验证在线部署、其他模型或其他任务。",
+      "required": ["title", "conclusion", "problem", "mechanism", "evidence", "insight", "boundary"],
+      "must_contain": {"evidence": ["100", "20%"], "boundary": ["离线", "相对", "未验证"]},
+      "max_characters": 1500
+    },
+    {
+      "id": "duplicate_vs_followup",
+      "task": "判断当日候选是否应保留。输出 keep_ids、duplicate_ids 两个字符串数组和 reason 非空字符串。旧闻的标题变化和跟踪参数不构成新增事实；相同主体有实质新功能时保留。",
+      "source": "虚构评测样本：昨天已刊 Atlas Notes 封闭测试，链接 https://example.com/atlas 。今天 A 的标题为 Atlas 团队分享引用能力，链接 https://example.com/atlas?utm_source=news ，正文仍是昨天公告。今天 B 是同一产品首次开放本地数据导出，独立新公告 https://example.com/atlas-export 。",
+      "exact": {"keep_ids": ["B"], "duplicate_ids": ["A"]},
+      "required": ["reason"]
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+[Unit]
+Description=Auto-publish only the 2026-08-05 through 2026-08-07 AI Daily issues
+
+[Timer]
+# Preparation begins at 08:30.  A 09:20 send window leaves 50 minutes for
+# source fetching, editorial generation, image generation, and the quality
+# gates. Persistent=false prevents a late catch-up email after downtime.
+OnCalendar=2026-08-05 09:20:00
+OnCalendar=2026-08-06 09:20:00
+OnCalendar=2026-08-07 09:20:00
+Persistent=false
+AccuracySec=1min
+Unit=ai-daily-holiday-autopublish.service
+
+[Install]
+WantedBy=timers.target

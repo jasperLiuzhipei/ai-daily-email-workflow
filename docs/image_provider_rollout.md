@@ -7,6 +7,7 @@
 - A candidate can produce a comparison HTML only when the run explicitly passes `--allow-candidate-image-provider`.
 - A candidate may enter a production email only after both gates pass: the provider is marked `production_allowed: true` in `config/image_providers.json`, and the staged image has `--quality-decision approved` plus concise manual comparison notes.
 - A failed or undecided candidate must fall back to the native baseline or stop the run. It must never silently replace the research image.
+- A scheduled server run must use one approved Image2 route only. Pass `--strict-image-route` (or `--forbid-fallback` to the lower-level generator) so that a network failure stops at preview instead of changing gateways mid-run.
 
 ## Native Baseline
 
@@ -14,34 +15,24 @@ Continue to generate through Codex ImageGen, then finalize exactly as before. Th
 
 ## Image2 Candidate
 
-The adapter expects an OpenAI Images-compatible endpoint. Use the normal OpenAI endpoint with `OPENAI_API_KEY`, or set `OPENAI_BASE_URL` to a company gateway that exposes the same endpoint. Keep the secret in the shell or a company secret store; never add it to repository files.
+The adapter expects an OpenAI Images-compatible endpoint configured by `config/ai_runtime.json`. Keep the secret in `.env` or a company secret store; never add it to repository files. Image API routing does not live in `image_providers.json`; that file only records quality and production policy.
 
 ```bash
-export OPENAI_API_KEY='...'
+AI_DAILY_API_KEY=
+AI_DAILY_API_BASE_URL=https://<approved-gateway>/v1
 
 python3 ai_daily_workflow/scripts/generate_research_image.py \
   --provider image2 \
   --prompt-file daily_runs/YYYY-MM-DD/research_image_prompt.txt \
   --out daily_runs/YYYY-MM-DD/image2_candidate.png \
-  --generation-manifest daily_runs/YYYY-MM-DD/image2_generation.json
+  --generation-manifest daily_runs/YYYY-MM-DD/image2_generation.json \
+  --forbid-fallback
 ```
 
-After visually comparing the candidate against a native ImageGen baseline using the same Visual Handoff, build a non-production comparison email:
+After visually comparing the candidate against a native ImageGen baseline using the same Visual Handoff, build a non-production comparison email with the runner:
 
 ```bash
-python3 ai_daily_workflow/scripts/finalize_ai_daily_workflow.py \
-  --date YYYY-MM-DD \
-  --content daily_runs/YYYY-MM-DD/ai_daily_email_content.json \
-  --brief-json daily_runs/YYYY-MM-DD/research_brief.parsed.json \
-  --prompt-file daily_runs/YYYY-MM-DD/research_image_prompt.txt \
-  --image-source daily_runs/YYYY-MM-DD/image2_candidate.png \
-  --source-kind generated \
-  --provider-id image2 \
-  --generation-manifest daily_runs/YYYY-MM-DD/image2_generation.json \
-  --quality-decision pending \
-  --allow-candidate-image-provider \
-  --review-status pass \
-  --review-notes "candidate checked against Visual Handoff"
+python3 ai_daily_workflow/scripts/run_ai_daily.py preview --date YYYY-MM-DD --theme digest_navy --news-layout paper
 ```
 
 Use the candidate result only for comparison until the provider configuration is intentionally approved. `pending` is therefore useful for visual testing, but cannot be sent through the production path.
@@ -53,17 +44,13 @@ Do not replace the baseline after one successful image. First test the exact sam
 Put the secret only in the ignored local `.env` file:
 
 ```bash
-OPENAI_API_KEY=
-OPENAI_BASE_URL=http://iwc-aime-model:9219/litellm/v1
+AI_DAILY_API_KEY=
+AI_DAILY_API_BASE_URL=https://<approved-gateway>/v1
 ```
 
-Load it into the current shell, then run the test. The optional baseline path makes the contact sheet suitable for an immediate visual A/B.
+The script loads `.env` automatically. The optional baseline path makes the contact sheet suitable for an immediate visual A/B.
 
 ```bash
-set -a
-source ai_daily_workflow/.env
-set +a
-
 python3 ai_daily_workflow/scripts/test_image_provider_stability.py \
   --provider image2 \
   --prompt-file daily_runs/YYYY-MM-DD/research_image_prompt.txt \
@@ -76,7 +63,7 @@ python3 ai_daily_workflow/scripts/test_image_provider_stability.py \
 
 Round-one transport gate: all three requests return a valid image and generation manifest, without a timeout, schema mismatch or malformed payload. The report also records request latency, output dimensions, image hashes and returned usage metadata when the gateway provides it.
 
-Before the three requests, the test performs a DNS and TCP preflight for `OPENAI_BASE_URL`. If the gateway hostname cannot be resolved or reached from the current machine, it writes a blocked report without issuing image-generation requests. Ask the platform owner for a desktop/VPN-reachable gateway address, or run the same command in the intended internal runtime; do not change the prompt or lower quality to work around a network failure.
+Before the three requests, the test resolves the image gateway through `ai_runtime.json` and performs a DNS/TCP preflight. If the gateway hostname cannot be reached, it writes a blocked report without issuing image requests. Ask the platform owner for a desktop/VPN-reachable address, or run the same command in the intended internal runtime; do not change the prompt or lower quality to work around a network failure.
 
 Then complete the five pending manual checks in the report: mechanism accuracy, Chinese text readability, evidence integrity, palette independence and email-scale readability. A provider should remain a candidate until it is at least equal to the Codex ImageGen baseline across several different research subjects; the test is evidence for that decision, not an automatic promotion.
 

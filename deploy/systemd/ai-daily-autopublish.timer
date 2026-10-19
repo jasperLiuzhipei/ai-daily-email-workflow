@@ -1,0 +1,14 @@
+[Unit]
+Description=Auto-publish AI Daily on company workdays at 09:20 Asia/Shanghai
+
+[Timer]
+# Preparation starts at 08:30. This gives source collection, editorial work,
+# image generation, and the independent quality gates 50 minutes to finish.
+# Persistent=false prevents a late catch-up email after downtime.
+OnCalendar=*-*-* 09:20:00 Asia/Shanghai
+Persistent=false
+AccuracySec=1min
+Unit=ai-daily-autopublish.service
+
+[Install]
+WantedBy=timers.target

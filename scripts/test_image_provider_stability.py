@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import socket
 import statistics
 import subprocess
@@ -23,6 +22,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from ai_daily_common import file_sha256, write_json_object
+from ai_gateway_client import GatewayError, load_runtime_config, resolve_provider as resolve_runtime_provider
 from image_provider_registry import ImageProviderError, load_provider_registry, resolve_provider
 
 
@@ -92,33 +92,40 @@ def safe_tail(value: str, limit: int = 800) -> str:
 def gateway_preflight(args: argparse.Namespace) -> dict[str, Any]:
     """Fail early when the configured API gateway is not reachable here."""
 
-    if args.dry_run:
-        return {"status": "skipped", "reason": "dry_run"}
-    if args.skip_gateway_preflight:
-        return {"status": "skipped", "reason": "explicitly_skipped"}
-
     try:
         registry = load_provider_registry(args.provider_registry)
-        _, provider = resolve_provider(args.provider, registry)
-    except ImageProviderError as exc:
+        resolve_provider(args.provider, registry)
+        runtime = resolve_runtime_provider("image", load_runtime_config(args.runtime_config))
+    except (GatewayError, ImageProviderError) as exc:
         return {"status": "failed", "stage": "provider_config", "error": str(exc)}
 
-    base_url_env = str(provider.get("base_url_env") or "OPENAI_BASE_URL")
-    base_url = os.environ.get(base_url_env)
-    if not base_url:
-        return {"status": "skipped", "reason": f"{base_url_env}_not_set"}
+    base_url = runtime.base_url
+    runtime_summary = {
+        "model": runtime.model,
+        "timeout_seconds": runtime.timeout_seconds,
+        "max_retries": runtime.max_retries,
+    }
+    if args.dry_run:
+        return {"status": "skipped", "reason": "dry_run", **runtime_summary}
+    if args.skip_gateway_preflight:
+        return {"status": "skipped", "reason": "explicitly_skipped", **runtime_summary}
 
     parsed = urlparse(base_url)
     if not parsed.hostname:
         return {
             "status": "failed",
             "stage": "base_url",
-            "error": f"{base_url_env} does not contain a valid hostname.",
+            "error": "configured image base URL does not contain a valid hostname.",
         }
 
     host = parsed.hostname
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    result: dict[str, Any] = {"host": host, "port": port, "scheme": parsed.scheme or "http"}
+    result: dict[str, Any] = {
+        "host": host,
+        "port": port,
+        "scheme": parsed.scheme or "http",
+        **runtime_summary,
+    }
     try:
         addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except socket.gaierror as exc:
@@ -145,8 +152,8 @@ def blocked_report(args: argparse.Namespace, preflight: dict[str, Any]) -> dict[
             "attempts": args.attempts,
             "size": args.size,
             "quality": args.quality,
-            "timeout_seconds": args.timeout_seconds,
-            "max_retries": args.max_retries,
+            "timeout_seconds": preflight.get("timeout_seconds"),
+            "max_retries": preflight.get("max_retries"),
             "dry_run": args.dry_run,
         },
         "gateway_preflight": preflight,
@@ -182,13 +189,11 @@ def run_attempt(args: argparse.Namespace, index: int, out_dir: Path) -> dict[str
         args.size,
         "--quality",
         args.quality,
-        "--timeout-seconds",
-        str(args.timeout_seconds),
-        "--max-retries",
-        str(args.max_retries),
     ]
     if args.provider_registry:
         cmd.extend(["--provider-registry", str(args.provider_registry)])
+    if args.runtime_config:
+        cmd.extend(["--runtime-config", str(args.runtime_config)])
     if args.force:
         cmd.append("--force")
     if args.dry_run:
@@ -246,13 +251,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--provider", default="image2")
     parser.add_argument("--provider-registry", type=Path)
+    parser.add_argument("--runtime-config", type=Path)
     parser.add_argument("--prompt-file", required=True, type=Path)
     parser.add_argument("--out-dir", required=True, type=Path)
     parser.add_argument("--attempts", type=int, default=3, help="Same-prompt request count for stability testing.")
     parser.add_argument("--size", default="1024x1024")
     parser.add_argument("--quality", default="high")
-    parser.add_argument("--timeout-seconds", type=int, default=120)
-    parser.add_argument("--max-retries", type=int, default=1)
     parser.add_argument(
         "--gateway-preflight-timeout-seconds",
         type=int,
@@ -272,8 +276,8 @@ def main() -> None:
 
     if args.attempts < 1:
         raise SystemExit("Stability test failed: --attempts must be at least 1.")
-    if args.timeout_seconds <= 0 or args.max_retries < 0 or args.gateway_preflight_timeout_seconds <= 0:
-        raise SystemExit("Stability test failed: invalid timeout or retry setting.")
+    if args.gateway_preflight_timeout_seconds <= 0:
+        raise SystemExit("Stability test failed: invalid gateway preflight timeout.")
     if not args.prompt_file.exists():
         raise SystemExit(f"Stability test failed: missing prompt file: {args.prompt_file}")
     if args.baseline_image and not args.baseline_image.exists():
@@ -316,8 +320,8 @@ def main() -> None:
             "attempts": args.attempts,
             "size": args.size,
             "quality": args.quality,
-            "timeout_seconds": args.timeout_seconds,
-            "max_retries": args.max_retries,
+            "timeout_seconds": preflight.get("timeout_seconds"),
+            "max_retries": preflight.get("max_retries"),
             "dry_run": args.dry_run,
         },
         "gateway_preflight": preflight,

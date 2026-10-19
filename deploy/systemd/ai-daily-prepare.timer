@@ -1,0 +1,10 @@
+[Unit]
+Description=Run AI Daily preparation on company workdays at 08:30 Asia/Shanghai
+
+[Timer]
+OnCalendar=*-*-* 08:30:00 Asia/Shanghai
+Persistent=true
+Unit=ai-daily-prepare.service
+
+[Install]
+WantedBy=timers.target

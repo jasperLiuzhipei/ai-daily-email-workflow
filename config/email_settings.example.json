@@ -5,5 +5,13 @@
     "port": 465,
     "security": "ssl",
     "user": "ai-daily@example.com"
+  },
+  "feedback": {
+    "enabled": false,
+    "base_url_env": "AI_DAILY_FEEDBACK_BASE_URL"
+  },
+  "conversation": {
+    "mode": "off",
+    "subject_template": "AI DAILY｜{year}年第{week}周"
   }
 }

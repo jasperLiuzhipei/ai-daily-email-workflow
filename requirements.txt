@@ -1,3 +1,8 @@
-# The core selector, renderer, CID packager, and SMTP sender use Python's standard library.
-# Install this only when enabling the API-backed gpt_image_2/Image2 provider.
-openai>=1.0.0
+# HTML email packaging and feedback-link injection use a real HTML parser.
+beautifulsoup4>=4.12,<5
+
+# CID email packaging compresses research images before attaching them.
+Pillow>=10.4,<12
+
+# Inline newspaper typography and table layout for email clients.
+premailer>=3.10,<4

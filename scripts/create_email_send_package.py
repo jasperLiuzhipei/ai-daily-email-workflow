@@ -26,7 +26,9 @@ from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.utils import formatdate, make_msgid
+from email import policy
+from email.parser import BytesParser
+from email.utils import formataddr, formatdate, getaddresses, make_msgid
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
@@ -42,6 +44,8 @@ from email_recipients import (
     resolve_recipient_delivery,
     write_recipient_snapshot,
 )
+from email_feedback import personalize_feedback, remove_feedback
+from feedback_service.routes import HEALTH_PATH, absolute_url
 
 
 DEFAULT_MAX_BYTES = 1_000_000
@@ -62,6 +66,58 @@ class InlineImage:
     final_bytes: int
     original_size: tuple[int, int] | None
     final_size: tuple[int, int] | None
+
+
+@dataclass(frozen=True)
+class FeedbackRuntime:
+    enabled: bool
+    base_url: str = ""
+    issue_id: str = ""
+    secret: str = ""
+    features_enabled: bool = False
+    health_status: str = "disabled"
+    health_error: str = ""
+
+
+def normalized_recipient_email(value: str) -> str:
+    """Return the canonical address for a display-address or bare email."""
+
+    addresses = [email.strip().lower() for _, email in getaddresses([value]) if email.strip()]
+    if len(addresses) != 1:
+        raise PackageError(f"Expected exactly one recipient email, got: {value!r}")
+    return addresses[0]
+
+
+def load_conversation_root_message_ids(package_dir: Path) -> dict[str, str]:
+    """Map each recipient in a prior personalized package to its Message-ID.
+
+    Mailing a personalized newsletter means that the root email has a distinct
+    Message-ID for each recipient.  The follow-up issue must therefore look up
+    the matching recipient's root rather than reuse one recipient's ID for the
+    entire list.
+    """
+
+    messages_dir = package_dir / "messages"
+    if not messages_dir.is_dir():
+        raise PackageError(
+            f"Conversation root package has no personalized messages directory: {messages_dir}"
+        )
+
+    roots: dict[str, str] = {}
+    for path in sorted(messages_dir.glob("*.eml")):
+        message = BytesParser(policy=policy.default).parsebytes(path.read_bytes())
+        recipients = [email.strip().lower() for _, email in getaddresses(message.get_all("To", [])) if email.strip()]
+        message_id = str(message.get("Message-ID") or "").strip()
+        if len(recipients) != 1 or not message_id:
+            raise PackageError(f"Invalid personalized conversation root message: {path}")
+        recipient = recipients[0]
+        if recipient in roots:
+            raise PackageError(f"Duplicate recipient in conversation root package: {recipient}")
+        roots[recipient] = message_id
+
+    if not roots:
+        raise PackageError(f"Conversation root package has no usable personalized messages: {messages_dir}")
+    return roots
 
 
 def slugify(value: str, fallback: str = "email") -> str:
@@ -296,17 +352,24 @@ def build_eml(
     plain_text: str,
     subject: str,
     from_addr: str | None,
+    from_name: str | None,
     to_addrs: list[str],
     images: list[InlineImage],
+    in_reply_to: str | None = None,
+    references: str | None = None,
 ) -> MIMEMultipart:
     msg = MIMEMultipart("related")
     msg["Subject"] = subject
     if from_addr:
-        msg["From"] = from_addr
+        msg["From"] = formataddr((from_name.strip(), from_addr)) if from_name and from_name.strip() else from_addr
     if to_addrs:
         msg["To"] = ", ".join(to_addrs)
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid(domain="local.ai-daily")
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+    if references:
+        msg["References"] = references
 
     alternative = MIMEMultipart("alternative")
     alternative.attach(MIMEText(plain_text, "plain", "utf-8"))
@@ -318,6 +381,136 @@ def build_eml(
     return msg
 
 
+def feedback_service_health(base_url: str, timeout: float) -> tuple[bool, str]:
+    """Return whether the optional feedback service is ready for this package."""
+
+    request = Request(
+        absolute_url(base_url, HEALTH_PATH),
+        headers={"Accept": "application/json", "User-Agent": "ai-daily-packager/1.0"},
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            status = int(getattr(response, "status", 200))
+            payload = json.loads(response.read(64_000).decode("utf-8"))
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    if status != 200:
+        return False, f"HTTP {status}"
+    if not isinstance(payload, dict) or payload.get("ok") is not True:
+        return False, "health response did not contain ok=true"
+    return True, ""
+
+
+def resolve_feedback_runtime(args: argparse.Namespace) -> FeedbackRuntime:
+    if args.disable_feedback:
+        if args.require_feedback:
+            raise PackageError("--disable-feedback cannot be combined with --require-feedback.")
+        return FeedbackRuntime(enabled=False)
+
+    base_url = str(args.feedback_base_url or "").strip().rstrip("/")
+    secret = str(os.environ.get("AI_DAILY_FEEDBACK_SECRET") or "").strip()
+    issue_id = str(args.feedback_issue or "").strip()
+    configured = bool(base_url or secret or issue_id)
+    if not configured:
+        if args.require_feedback:
+            raise PackageError(
+                "Feedback is required but not configured. Set AI_DAILY_FEEDBACK_BASE_URL, "
+                "AI_DAILY_FEEDBACK_SECRET and --feedback-issue."
+            )
+        return FeedbackRuntime(enabled=False)
+    if not base_url or not secret or not issue_id:
+        raise PackageError(
+            "Incomplete feedback configuration. Base URL, AI_DAILY_FEEDBACK_SECRET and issue ID are all required."
+        )
+    if len(secret) < 16:
+        raise PackageError("AI_DAILY_FEEDBACK_SECRET must be at least 16 characters.")
+    if not base_url.startswith(("https://", "http://")):
+        raise PackageError("Feedback base URL must start with http:// or https://.")
+    if args.skip_feedback_health_check:
+        return FeedbackRuntime(
+            enabled=True,
+            base_url=base_url,
+            issue_id=issue_id,
+            secret=secret,
+            features_enabled=True,
+            health_status="skipped",
+        )
+
+    healthy, error = feedback_service_health(base_url, args.feedback_health_timeout)
+    if not healthy and args.require_feedback:
+        raise PackageError(f"Feedback is required but its health check failed: {error}")
+    return FeedbackRuntime(
+        enabled=True,
+        base_url=base_url,
+        issue_id=issue_id,
+        secret=secret,
+        features_enabled=healthy,
+        health_status="healthy" if healthy else "unavailable",
+        health_error=error,
+    )
+
+
+def build_personalized_messages(
+    *,
+    package_dir: Path,
+    html: str,
+    plain_text: str,
+    subject: str,
+    from_addr: str | None,
+    from_name: str | None,
+    recipients: list[dict[str, str]],
+    images: list[InlineImage],
+    feedback: FeedbackRuntime,
+    conversation_root_message_ids: dict[str, str] | None = None,
+) -> list[dict[str, object]]:
+    if not feedback.enabled:
+        return []
+    messages_dir = package_dir / "messages"
+    messages_dir.mkdir(parents=True, exist_ok=True)
+    output: list[dict[str, object]] = []
+    for index, recipient in enumerate(recipients, start=1):
+        if feedback.features_enabled:
+            recipient_html, _ = personalize_feedback(
+                html,
+                base_url=feedback.base_url,
+                issue_id=feedback.issue_id,
+                recipient_key=recipient["email"],
+                secret=feedback.secret,
+            )
+        else:
+            # Preserve one-message-per-recipient delivery and weekly thread
+            # headers even when the optional feedback service is unavailable.
+            recipient_html = remove_feedback(html)
+        address = formatted_addresses([recipient])[0]
+        root_message_id = None
+        if conversation_root_message_ids is not None:
+            recipient_email = normalized_recipient_email(recipient["email"])
+            root_message_id = conversation_root_message_ids.get(recipient_email)
+            # Midweek subscribers have no earlier message to reference. Send
+            # their own new message, never another recipient's thread ID.
+        message = build_eml(
+            html=recipient_html,
+            plain_text=plain_text,
+            subject=subject,
+            from_addr=from_addr,
+            from_name=from_name,
+            to_addrs=[address],
+            images=images,
+            in_reply_to=root_message_id,
+            references=root_message_id,
+        )
+        path = messages_dir / f"message-{index:03d}.eml"
+        path.write_bytes(message.as_bytes())
+        output.append(
+            {
+                "index": index,
+                "path": str(path.relative_to(package_dir)),
+                "in_reply_to": root_message_id,
+            }
+        )
+    return output
+
+
 def write_readme(
     package_dir: Path,
     html_path: Path,
@@ -327,6 +520,9 @@ def write_readme(
     delivery: dict,
     images: list[InlineImage],
     max_bytes: int,
+    feedback: FeedbackRuntime,
+    personalized_messages: list[dict[str, object]],
+    conversation_root_package: Path | None,
 ) -> None:
     lines = [
         "AI 日报邮件发送包",
@@ -350,6 +546,38 @@ def write_readme(
         f"图片压缩上限: {max_bytes} bytes",
         f"图片数量: {len(images)}",
     ]
+    if feedback.enabled and feedback.features_enabled:
+        lines.extend(
+            [
+                "",
+                "反馈与阅读统计:",
+                f"- 已启用匿名个性化，期次 ID: {feedback.issue_id}。",
+                f"- messages/ 内有 {len(personalized_messages)} 封真实发送邮件；自动 SMTP 发送器会逐封发送。",
+                f"- {eml_path.name} 和 body.html 只用于预览，不含追踪像素，也不会污染阅读率。",
+                "- 请不要手工群发顶层 .eml，否则不会产生阅读率和按人去重的反馈数据。",
+            ]
+        )
+    elif feedback.enabled:
+        lines.extend(
+            [
+                "",
+                "反馈与阅读统计: 本次健康检查未通过，已自动降级。",
+                f"- 原因: {feedback.health_error or feedback.health_status}",
+                "- 新闻来源保持原文直链；评分、建议和打开统计已从本次发送包移除。",
+                f"- messages/ 内仍有 {len(personalized_messages)} 封逐收件人邮件，收件人隔离与会话聚合不受影响。",
+            ]
+        )
+    else:
+        lines.extend(["", "反馈与阅读统计: 未启用；邮件包不含远程追踪像素或反馈链接。"])
+    if conversation_root_package:
+        lines.extend(
+            [
+                "",
+                "会话聚合:",
+                f"- 老收件人引用本周根邮件包；本周新加入的收件人从当前邮件开始: {conversation_root_package}",
+                "- 请保持同一周的邮件主题完全一致；周一为根邮件，后续工作日为跟帖。",
+            ]
+        )
     group = delivery.get("recipient_group")
     if group:
         lines.extend(
@@ -373,7 +601,14 @@ def write_readme(
     (package_dir / "README.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def write_manifest(package_dir: Path, images: list[InlineImage], delivery: dict) -> None:
+def write_manifest(
+    package_dir: Path,
+    images: list[InlineImage],
+    delivery: dict,
+    feedback: FeedbackRuntime,
+    personalized_messages: list[dict[str, object]],
+    conversation_root_package: Path | None,
+) -> None:
     data = {
         "recipient_delivery": {
             "recipient_group": delivery.get("recipient_group"),
@@ -392,7 +627,22 @@ def write_manifest(package_dir: Path, images: list[InlineImage], delivery: dict)
                 "final_size": image.final_size,
             }
             for image in images
-        ]
+        ],
+        "personalized_delivery": {
+            "enabled": feedback.enabled,
+            "feedback_base_url": feedback.base_url if feedback.enabled else None,
+            "issue_id": feedback.issue_id if feedback.enabled else None,
+            "feedback_features_enabled": feedback.features_enabled,
+            "feedback_health_status": feedback.health_status,
+            "feedback_health_error": feedback.health_error or None,
+            "source_links": "direct",
+            "message_count": len(personalized_messages),
+            "messages": personalized_messages,
+        },
+        "conversation": {
+            "enabled": conversation_root_package is not None,
+            "root_package": str(conversation_root_package) if conversation_root_package else None,
+        },
     }
     (package_dir / "manifest.json").write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -406,6 +656,11 @@ def parse_args() -> argparse.Namespace:
         "--from-addr",
         default=os.environ.get("AI_DAILY_FROM_ADDR", ""),
         help="From header. Use empty string to omit.",
+    )
+    parser.add_argument(
+        "--from-name",
+        default=os.environ.get("AI_DAILY_FROM_NAME", ""),
+        help="Optional display name for the From header. The SMTP envelope remains --from-addr.",
     )
     parser.add_argument("--to", action="append", default=[], help="Recipient header. Can be repeated.")
     parser.add_argument(
@@ -421,6 +676,33 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-image-bytes", type=int, default=DEFAULT_MAX_BYTES, help="Max bytes per inline image.")
     parser.add_argument("--remote-timeout", type=int, default=20, help="Timeout for remote image download.")
+    parser.add_argument(
+        "--feedback-base-url",
+        default=os.environ.get("AI_DAILY_FEEDBACK_BASE_URL", ""),
+        help="Reachable feedback-service URL. The signing secret is read only from AI_DAILY_FEEDBACK_SECRET.",
+    )
+    parser.add_argument("--feedback-issue", help="Stable issue ID, normally YYYY-MM-DD.")
+    parser.add_argument(
+        "--conversation-root-package",
+        type=Path,
+        help=(
+            "Prior personalized package used as this email's conversation root. "
+            "A recipient-specific Message-ID is looked up from its messages/ directory."
+        ),
+    )
+    parser.add_argument("--disable-feedback", action="store_true", help="Build without feedback or open tracking.")
+    parser.add_argument("--require-feedback", action="store_true", help="Fail if feedback is not fully configured.")
+    parser.add_argument(
+        "--feedback-health-timeout",
+        type=float,
+        default=4.0,
+        help="Seconds allowed for the optional feedback-service health check.",
+    )
+    parser.add_argument(
+        "--skip-feedback-health-check",
+        action="store_true",
+        help="Keep feedback features without probing the service. Intended for controlled tests only.",
+    )
     parser.add_argument("--overwrite", action="store_true", help="Overwrite an existing output package directory.")
     return parser.parse_args()
 
@@ -432,11 +714,14 @@ def main() -> None:
         raise SystemExit(f"Package failed: missing HTML file: {html_path}")
     if args.max_image_bytes <= 0:
         raise SystemExit("Package failed: --max-image-bytes must be positive.")
+    if args.feedback_health_timeout <= 0:
+        raise SystemExit("Package failed: --feedback-health-timeout must be positive.")
 
     try:
         delivery = resolve_recipient_delivery(args.recipient_list, args.to, args.recipient_config)
         to_addrs = formatted_addresses(delivery["recipients"])
-    except RecipientError as exc:
+        feedback = resolve_feedback_runtime(args)
+    except (RecipientError, PackageError) as exc:
         raise SystemExit(f"Package failed: {exc}") from exc
 
     package_dir = (args.out_dir or Path("email_packages") / html_path.stem).resolve()
@@ -450,6 +735,17 @@ def main() -> None:
     soup_cid = BeautifulSoup(source_html, "html.parser")
     soup_local = BeautifulSoup(source_html, "html.parser")
     subject = extract_subject(soup_cid, html_path, args.subject)
+    conversation_root_package = (
+        args.conversation_root_package.resolve() if args.conversation_root_package else None
+    )
+    try:
+        conversation_root_message_ids = (
+            load_conversation_root_message_ids(conversation_root_package)
+            if conversation_root_package
+            else None
+        )
+    except (OSError, PackageError) as exc:
+        raise SystemExit(f"Package failed: {exc}") from exc
 
     try:
         images = process_images(
@@ -460,25 +756,59 @@ def main() -> None:
             max_bytes=args.max_image_bytes,
             timeout=args.remote_timeout,
         )
-        body_html = str(soup_local)
-        cid_html = str(soup_cid)
+        cid_html_with_feedback = str(soup_cid)
+        body_html = remove_feedback(str(soup_local))
+        preview_cid_html = remove_feedback(cid_html_with_feedback)
         body_path = package_dir / "body.html"
         body_path.write_text(body_html, encoding="utf-8")
+        plain_text = plain_fallback(BeautifulSoup(body_html, "html.parser"))
 
         msg = build_eml(
-            html=cid_html,
-            plain_text=plain_fallback(soup_local),
+            html=preview_cid_html,
+            plain_text=plain_text,
             subject=subject,
             from_addr=args.from_addr or None,
+            from_name=args.from_name or None,
             to_addrs=to_addrs,
             images=images,
         )
         eml_path = package_dir / f"{slugify(subject, html_path.stem)}.eml"
         eml_path.write_bytes(msg.as_bytes())
+        personalized_messages = build_personalized_messages(
+            package_dir=package_dir,
+            html=cid_html_with_feedback,
+            plain_text=plain_text,
+            subject=subject,
+            from_addr=args.from_addr or None,
+            from_name=args.from_name or None,
+            recipients=delivery["recipients"],
+            images=images,
+            feedback=feedback,
+            conversation_root_message_ids=conversation_root_message_ids,
+        )
         snapshot_path = package_dir / RECIPIENT_SNAPSHOT_NAME
         write_recipient_snapshot(snapshot_path, delivery)
-        write_readme(package_dir, html_path, eml_path, body_path, subject, delivery, images, args.max_image_bytes)
-        write_manifest(package_dir, images, delivery)
+        write_readme(
+            package_dir,
+            html_path,
+            eml_path,
+            body_path,
+            subject,
+            delivery,
+            images,
+            args.max_image_bytes,
+            feedback,
+            personalized_messages,
+            conversation_root_package,
+        )
+        write_manifest(
+            package_dir,
+            images,
+            delivery,
+            feedback,
+            personalized_messages,
+            conversation_root_package,
+        )
     except Exception as exc:
         raise SystemExit(f"Package failed: {exc}") from exc
 
@@ -487,6 +817,15 @@ def main() -> None:
     print(f"HTML: {body_path}")
     print(f"Images: {len(images)}")
     print(f"Recipients: {delivery['recipient_count']}")
+    print(
+        "Feedback features: "
+        f"{'enabled' if feedback.features_enabled else 'degraded' if feedback.enabled else 'disabled'}"
+    )
+    print("Source links: direct")
+    if feedback.enabled:
+        print(f"Personalized messages: {len(personalized_messages)}")
+    if conversation_root_package:
+        print(f"Conversation root package: {conversation_root_package}")
     print(f"Recipient snapshot: {snapshot_path}")
     if delivery["recipient_group"]:
         group = delivery["recipient_group"]

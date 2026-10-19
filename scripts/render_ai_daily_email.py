@@ -10,10 +10,14 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import math
 from pathlib import Path
 from typing import Any
+
+from email_feedback import render_feedback_block
 from urllib.parse import urlparse
 
+from daily_config import load_content_sections, load_editorial_policy
 
 FONT_STACK = (
     "'Avenir Next','Helvetica Neue','PingFang SC','Microsoft YaHei',Arial,sans-serif"
@@ -84,20 +88,22 @@ THEMES = {
         "tag_border": "#A9C3DA",
     },
     "digest_navy": {
-        "accent": "#2F7FA4",
-        "accent_dark": "#1E5E7C",
-        "accent_soft": "#F4F9FC",
-        "accent_border": "#D5E5EF",
-        "tag_border": "#AFCBDB",
+        "accent": "#4E7A8A",
+        "accent_dark": "#365965",
+        "accent_soft": "#F7F8F8",
+        "accent_border": "#E1E5E6",
+        "tag_border": "#CBD3D6",
     },
 }
 
-ACCENT = THEMES["clay_orange"]["accent"]
-ACCENT_DARK = THEMES["clay_orange"]["accent_dark"]
-ACCENT_SOFT = THEMES["clay_orange"]["accent_soft"]
-ACCENT_BORDER = THEMES["clay_orange"]["accent_border"]
-TAG_BORDER = THEMES["clay_orange"]["tag_border"]
-CURRENT_THEME = "clay_orange"
+DEFAULT_THEME = "digest_navy"
+
+ACCENT = THEMES[DEFAULT_THEME]["accent"]
+ACCENT_DARK = THEMES[DEFAULT_THEME]["accent_dark"]
+ACCENT_SOFT = THEMES[DEFAULT_THEME]["accent_soft"]
+ACCENT_BORDER = THEMES[DEFAULT_THEME]["accent_border"]
+TAG_BORDER = THEMES[DEFAULT_THEME]["tag_border"]
+CURRENT_THEME = DEFAULT_THEME
 SOURCE_PRIMARY_LABEL = "阅读原文"
 NEWS_LAYOUTS = ("classic", "paper", "compact", "rail")
 NEWS_LAYOUT = "paper"
@@ -170,9 +176,18 @@ def source_host(url: str) -> str:
 
 
 def source_display(url: str) -> str:
+    parsed = urlparse(str(url or ""))
     host = source_host(url)
     if not host:
         return ""
+
+    path = parsed.path.lower()
+    if host == "anthropic.com":
+        return "Anthropic Research" if path.startswith("/research/") else "Anthropic"
+    if host == "research.google":
+        return "Google Research"
+    if host == "openai.com":
+        return "OpenAI"
 
     source_names = {
         "mp.weixin.qq.com": "微信公众号",
@@ -208,7 +223,27 @@ def source_link_label(link: dict[str, str], idx: int, context: str = "research")
     return SOURCE_PRIMARY_LABEL
 
 
-def render_source_button(link: dict[str, str], idx: int = 0, context: str = "research") -> str:
+def source_tracking_attrs(title: object) -> str:
+    """Mark editorial source links and open them outside the email document.
+
+    Local ``file://`` previews and some desktop mail clients handle an in-place
+    HTTPS navigation inconsistently.  A new browsing context keeps the digest
+    visible and makes the external-source action reliable.
+    """
+
+    normalized_title = " ".join(str(title or "").split())[:240]
+    return (
+        ' target="_blank" rel="noopener noreferrer"'
+        f' data-ai-daily-track-link="1" data-ai-daily-track-title="{esc(normalized_title)}"'
+    )
+
+
+def render_source_button(
+    link: dict[str, str],
+    idx: int = 0,
+    context: str = "research",
+    article_title: object = "",
+) -> str:
     url = str(link.get("url") or "")
     if not url:
         return ""
@@ -223,7 +258,7 @@ def render_source_button(link: dict[str, str], idx: int = 0, context: str = "res
         )
     return (
         f'<td style="border:1px solid {ACCENT_BORDER};border-radius:6px;background:#ffffff;">'
-        f'<a href="{esc(url)}" style="display:inline-block;padding:6px 9px;'
+        f'<a href="{esc(url)}"{source_tracking_attrs(article_title)} style="display:inline-block;padding:6px 9px;'
         f"color:{ACCENT_DARK};text-decoration:none;font-size:12px;line-height:1;"
         f'font-weight:700;white-space:nowrap;">'
         f'<span style="color:{ACCENT_DARK};">{esc(label)}</span>'
@@ -233,12 +268,12 @@ def render_source_button(link: dict[str, str], idx: int = 0, context: str = "res
     )
 
 
-def render_buttons(links: list[dict[str, str]]) -> str:
+def render_buttons(links: list[dict[str, str]], article_title: object = "") -> str:
     cells: list[str] = []
     for idx, link in enumerate(links):
         if idx:
             cells.append('<td style="width:8px;font-size:0;line-height:0;">&nbsp;</td>')
-        cells.append(render_source_button(link, idx, "research"))
+        cells.append(render_source_button(link, idx, "research", article_title))
     if not cells:
         return ""
     return (
@@ -248,13 +283,17 @@ def render_buttons(links: list[dict[str, str]]) -> str:
     )
 
 
-def render_link_button(url: str, label: str = SOURCE_PRIMARY_LABEL) -> str:
+def render_link_button(
+    url: str,
+    label: str = SOURCE_PRIMARY_LABEL,
+    article_title: object = "",
+) -> str:
     if not url:
         return ""
     return (
         '<table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:12px;">'
         "<tr>"
-        f'{render_source_button({"url": url, "label": label}, 0, "news")}'
+        f'{render_source_button({"url": url, "label": label}, 0, "news", article_title)}'
         "</tr>"
         "</table>"
     )
@@ -432,7 +471,7 @@ def render_news_card_classic(item: dict[str, Any], index: int) -> str:
             </tr>
             <tr>
               <td colspan="2" style="padding:0 18px 17px 18px;">
-                {render_link_button(item.get("url"))}
+                {render_link_button(item.get("url"), article_title=item.get("title"))}
               </td>
             </tr>
           </table>
@@ -457,7 +496,7 @@ def render_news_card_paper(item: dict[str, Any], index: int) -> str:
                   {render_news_step(observation_label(item), item.get("observation", ""), True)}
                 </table>
                 {boundary}
-                {render_link_button(item.get("url"))}
+                {render_link_button(item.get("url"), article_title=item.get("title"))}
               </td>
             </tr>
           </table>
@@ -500,7 +539,7 @@ def render_news_list_item_paper(item: dict[str, Any], is_last: bool = False) -> 
             {render_news_step(observation_label(item), item.get("observation", ""), True)}
           </table>
           {boundary}
-          {render_link_button(item.get("url"))}
+          {render_link_button(item.get("url"), article_title=item.get("title"))}
           {divider}
         </td>
       </tr>
@@ -557,7 +596,7 @@ def render_news_card_compact(item: dict[str, Any], index: int) -> str:
                   {render_news_field(observation_label(item), item.get("observation", ""), "6px")}
                 </table>
                 {boundary}
-                {render_link_button(item.get("url"))}
+                {render_link_button(item.get("url"), article_title=item.get("title"))}
               </td>
             </tr>
           </table>
@@ -585,7 +624,7 @@ def render_news_card_rail(item: dict[str, Any], index: int) -> str:
                   {render_news_field(observation_label(item), item.get("observation", ""), "6px")}
                 </table>
                 {boundary}
-                {render_link_button(item.get("url"))}
+                {render_link_button(item.get("url"), article_title=item.get("title"))}
               </td>
             </tr>
           </table>
@@ -669,7 +708,7 @@ def render_research_card(paper: dict[str, Any]) -> str:
                       </tr>
                     </table>
 
-                    {render_buttons(paper.get("links", []))}
+                    {render_buttons(paper.get("links", []), paper.get("title"))}
                   </td>
                 </tr>
               </table>
@@ -780,7 +819,7 @@ def render_research_card_mono(paper: dict[str, Any]) -> str:
                   {steps}
                 </table>
                 {render_mono_note("边界说明", paper_field(paper, "boundary"))}
-                {render_buttons(paper.get("links", []))}
+                {render_buttons(paper.get("links", []), paper.get("title"))}
               </td>
             </tr>
           </table>
@@ -822,7 +861,7 @@ def render_mono_news_item(item: dict[str, Any], index: int, is_last: bool) -> st
                   {render_mono_news_line(observation_label(item), item.get("observation", ""))}
                 </table>
                 {render_mono_note("说明", item.get("boundary", ""))}
-                {render_link_button(item.get("url"))}
+                {render_link_button(item.get("url"), article_title=item.get("title"))}
               </td>
             </tr>
           </table>
@@ -871,12 +910,24 @@ def render_mono_closing(title: str, body: str, contact: str = "") -> str:
 
 def render_email_editorial_mono(data: dict[str, Any]) -> str:
     research = research_items(data)
-    paper = research[0]
+    paper = research[0] if research else None
     news_items = data.get("news", [])
     footer = data.get("footer", {})
     news_section = data.get("news_section", {})
     display_date = data.get("display_date") or data.get("date")
     contact = f'{esc(footer.get("name"))}｜<a href="mailto:{esc(footer.get("email"))}" style="color:#111111;text-decoration:underline;">{esc(footer.get("email"))}</a>'
+    research_content = ""
+    if paper:
+        research_content = (
+            render_mono_section_heading(
+                paper.get("section_title", "研究前沿"),
+                "把前沿方法转译成可理解、可讨论的工作启发",
+                "RESEARCH PICK",
+                "01",
+            )
+            + render_research_card_mono(paper)
+        )
+    news_number = "02" if paper else "01"
 
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -916,11 +967,11 @@ def render_email_editorial_mono(data: dict[str, Any]) -> str:
             </td>
           </tr>
 
-          {render_mono_section_heading(paper.get("section_title", "研究前沿"), "把前沿方法转译成可理解、可讨论的工作启发", "RESEARCH PICK", "01")}
-          {render_research_card_mono(paper)}
-          {render_mono_section_heading(news_section.get("title", "行业动态"), news_section.get("subtitle", ""), "INDUSTRY SIGNALS", "02")}
+          {research_content}
+          {render_mono_section_heading(news_section.get("title", "行业动态"), news_section.get("subtitle", ""), "INDUSTRY SIGNALS", news_number)}
           {render_news_list_mono(news_items)}
           {render_mono_closing("今日小结", data.get("summary", ""))}
+          {render_feedback_block()}
           {render_mono_closing(footer.get("title", "试运行说明"), footer.get("body", ""), contact)}
           <tr><td style="height:36px;font-size:0;line-height:0;">&nbsp;</td></tr>
         </table>
@@ -943,14 +994,14 @@ def render_newsroom_tags(tags: list[str]) -> str:
     )
 
 
-def render_newsroom_source_link(url: str) -> str:
+def render_newsroom_source_link(url: str, article_title: object = "") -> str:
     if not url:
         return ""
     source = source_display(url)
     suffix = f" / {esc(source)}" if source else ""
     return (
         '<div style="font-size:12px;line-height:1.5;padding-top:14px;">'
-        f'<a href="{esc(url)}" style="color:{ACCENT_DARK};text-decoration:underline;font-weight:700;">阅读原文</a>'
+        f'<a href="{esc(url)}"{source_tracking_attrs(article_title)} style="color:{ACCENT_DARK};text-decoration:underline;font-weight:700;">阅读原文</a>'
         f'<span style="color:#808080;font-family:\'SFMono-Regular\',\'Cascadia Mono\',Consolas,monospace;font-size:11px;">{suffix}</span>'
         "</div>"
     )
@@ -1018,7 +1069,7 @@ def render_research_feature_newsroom(paper: dict[str, Any]) -> str:
               <td style="padding-top:20px;">
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0">{details}</table>
                 {render_newsroom_boundary_hint(boundary)}
-                <table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:14px;"><tr><td style="font-size:12px;line-height:1.5;">{''.join(render_newsroom_source_link(str(link.get('url') or '')) for link in paper.get('links', []))}</td></tr></table>
+                <table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:14px;"><tr><td style="font-size:12px;line-height:1.5;">{''.join(render_newsroom_source_link(str(link.get('url') or ''), paper.get('title')) for link in paper.get('links', []))}</td></tr></table>
               </td>
             </tr>
           </table>
@@ -1046,7 +1097,7 @@ def render_newsroom_item(item: dict[str, Any]) -> str:
                 <div style="font-size:13px;line-height:1.8;color:#494949;padding-top:13px;"><strong style="color:{ACCENT_DARK};">为什么值得看：</strong>{esc(why)}</div>
                 <div style="font-size:13px;line-height:1.8;color:#494949;padding-top:7px;"><strong style="color:{ACCENT_DARK};">{esc(observation_label(item))}：</strong>{esc(observation)}</div>
                 {boundary_html}
-                {render_newsroom_source_link(item.get("url", ""))}
+                {render_newsroom_source_link(item.get("url", ""), item.get("title"))}
               </td>
             </tr>
           </table>
@@ -1073,7 +1124,7 @@ def render_newsroom_section_heading(number: str, title: str, label: str, subtitl
 
 def render_email_newsroom_mono(data: dict[str, Any]) -> str:
     research = research_items(data)
-    paper = research[0]
+    paper = research[0] if research else None
     news_section = data.get("news_section", {})
     footer = data.get("footer", {})
     display_date = data.get("display_date") or data.get("date")
@@ -1087,6 +1138,18 @@ def render_email_newsroom_mono(data: dict[str, Any]) -> str:
     header_eyebrow = "#AFC4D8" if is_navy else "#BEBEBB"
     header_rule = "#416C95" if is_navy else "#4D4D4B"
     page_background = "#EEF3F7" if is_navy else "#F0F0EE"
+    research_content = ""
+    if paper:
+        research_content = (
+            render_newsroom_section_heading(
+                "01",
+                paper.get("section_title", "研究前沿"),
+                "RESEARCH FRONTIER",
+                "一篇主稿，拆开方法、证据与边界",
+            )
+            + render_research_feature_newsroom(paper)
+        )
+    news_number = "02" if paper else "01"
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1117,9 +1180,8 @@ def render_email_newsroom_mono(data: dict[str, Any]) -> str:
               <div style="font-size:17px;line-height:1.72;color:#252525;font-weight:500;">{esc(data.get("editor_note"))}</div>
             </td>
           </tr>
-          {render_newsroom_section_heading("01", paper.get("section_title", "研究前沿"), "RESEARCH FRONTIER", "一篇主稿，拆开方法、证据与边界")}
-          {render_research_feature_newsroom(paper)}
-          {render_newsroom_section_heading("02", news_section.get("title", "行业动态"), "INDUSTRY NEWS", "精选今日值得关注的 AI 产品、技术与行业信号")}
+          {research_content}
+          {render_newsroom_section_heading(news_number, news_section.get("title", "行业动态"), "INDUSTRY NEWS", "精选今日值得关注的 AI 产品、技术与行业信号")}
           {render_newsroom_news_list(data.get("news", []))}
           <tr>
             <td style="padding:7px 44px 0 44px;background:{ACCENT_DARK};">
@@ -1127,6 +1189,7 @@ def render_email_newsroom_mono(data: dict[str, Any]) -> str:
               <div style="font-size:18px;line-height:1.7;color:#FFFFFF;font-weight:500;padding-bottom:25px;">{esc(data.get("summary"))}</div>
             </td>
           </tr>
+          {render_feedback_block()}
           <tr>
             <td style="padding:23px 44px 34px 44px;background:#FFFFFF;">
               <div style="font-size:12px;line-height:1;color:#555555;font-weight:700;letter-spacing:1.2px;padding-bottom:8px;">{esc(footer.get("title", "试运行说明"))}</div>
@@ -1143,12 +1206,45 @@ def render_email_newsroom_mono(data: dict[str, Any]) -> str:
 """
 
 
-DIGEST_CATEGORY_ORDER = (
+DEFAULT_DIGEST_CATEGORY_ORDER = (
     ("model_update", "模型更新", "MODEL UPDATES"),
     ("product_release", "产品发布", "PRODUCT RELEASES"),
     ("industry_signal", "行业动态", "INDUSTRY SIGNALS"),
     ("methods_and_views", "技巧与观点", "METHODS & VIEWS"),
 )
+WORKFLOW_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_CONTENT_SECTIONS = WORKFLOW_DIR / "config" / "content_sections.json"
+DEFAULT_EDITORIAL_POLICY = WORKFLOW_DIR / "config" / "editorial_policy.json"
+ACTIVE_CONTENT_SECTIONS = load_content_sections(DEFAULT_CONTENT_SECTIONS)
+ACTIVE_EDITORIAL_POLICY = load_editorial_policy(DEFAULT_EDITORIAL_POLICY)
+DIGEST_CATEGORY_ORDER = DEFAULT_DIGEST_CATEGORY_ORDER
+
+
+def configure_digest_policy(
+    content_sections: dict[str, Any] | None = None,
+    editorial_policy: dict[str, Any] | None = None,
+) -> None:
+    """Apply configurable section labels and editorial display rules."""
+    global ACTIVE_CONTENT_SECTIONS, ACTIVE_EDITORIAL_POLICY, DIGEST_CATEGORY_ORDER
+    if content_sections is not None:
+        ACTIVE_CONTENT_SECTIONS = content_sections
+    if editorial_policy is not None:
+        ACTIVE_EDITORIAL_POLICY = editorial_policy
+
+    categories = ACTIVE_CONTENT_SECTIONS.get("news_categories", [])
+    configured: list[tuple[str, str, str]] = []
+    for category in categories:
+        if not isinstance(category, dict):
+            continue
+        key = str(category.get("key") or "").strip()
+        title = str(category.get("title") or "").strip()
+        label = str(category.get("label") or "").strip()
+        if key and title and label:
+            configured.append((key, title, label))
+    DIGEST_CATEGORY_ORDER = tuple(configured) or DEFAULT_DIGEST_CATEGORY_ORDER
+
+
+configure_digest_policy(ACTIVE_CONTENT_SECTIONS, ACTIVE_EDITORIAL_POLICY)
 
 
 def digest_news_category(item: dict[str, Any]) -> str:
@@ -1158,13 +1254,13 @@ def digest_news_category(item: dict[str, Any]) -> str:
 
     tags = " ".join(str(tag) for tag in item.get("tags", [])).lower()
     title = str(item.get("title") or "").lower()
-    if any(token in tags or token in title for token in ["模型", "model release", "大模型"]):
-        return "model_update"
-    if any(token in tags or token in title for token in ["skill", "prompt", "评测", "coding", "方法"]):
-        return "methods_and_views"
-    if any(token in tags or token in title for token in ["产品", "入口", "app", "agent"]):
-        return "product_release"
-    return "industry_signal"
+    for category in ACTIVE_CONTENT_SECTIONS.get("news_categories", []):
+        if not isinstance(category, dict):
+            continue
+        terms = [str(term).lower() for term in category.get("match_terms", [])]
+        if terms and any(term and (term in tags or term in title) for term in terms):
+            return str(category.get("key") or "industry_signal")
+    return str(ACTIVE_CONTENT_SECTIONS.get("fallback_news_category") or "industry_signal")
 
 
 def digest_news_groups(items: list[dict[str, Any]]) -> list[tuple[str, str, str, list[dict[str, Any]]]]:
@@ -1179,35 +1275,37 @@ def digest_news_groups(items: list[dict[str, Any]]) -> list[tuple[str, str, str,
     ]
 
 
-def render_digest_sources(links: list[dict[str, str]]) -> str:
+def render_digest_sources(links: list[dict[str, str]], article_title: object = "") -> str:
     anchors: list[str] = []
     for link in links:
         url = str(link.get("url") or "")
         if not url:
             continue
-        label = str(link.get("label") or source_display(url) or "原始来源")
+        # This row names the source. Action labels such as "阅读原文"
+        # belong on buttons and should not appear as source metadata.
+        label = source_display(url) or "原始来源"
         anchors.append(
-            f'<a class="digest-link" href="{esc(url)}" style="color:#718096;text-decoration:none;">{esc(label)}</a>'
+            f'<a class="digest-link" href="{esc(url)}"{source_tracking_attrs(article_title)} style="color:#4E7A8A;text-decoration:underline;text-underline-offset:2px;font-weight:600;">{esc(label)}</a>'
         )
     if not anchors:
         return ""
     return (
-        '<div style="font-size:12px;line-height:1.6;color:#8A97A5;padding-top:6px;letter-spacing:.2px;">'
+        '<div style="font-size:12px;line-height:1.6;color:#858D93;padding-top:6px;letter-spacing:.2px;">'
         f'<span style="color:{ACCENT};font-weight:600;letter-spacing:.8px;">来源</span>'
-        ' <span style="color:#C0C8D0;padding:0 4px;">/</span> '
-        + " <span style=\"color:#C0C8D0;padding:0 4px;\">·</span> ".join(anchors)
+        ' <span style="color:#D0D5D8;padding:0 4px;">/</span> '
+        + " <span style=\"color:#D0D5D8;padding:0 4px;\">·</span> ".join(anchors)
         + "</div>"
     )
 
 
-def render_digest_news_source(url: str) -> str:
+def render_digest_news_source(url: str, article_title: object = "") -> str:
     if not url:
         return ""
     label = source_display(url) or "原始来源"
     return (
-        '<div style="font-size:12px;line-height:1.6;color:#8A97A5;padding-top:6px;letter-spacing:.2px;">'
+        '<div style="font-size:12px;line-height:1.6;color:#858D93;padding-top:6px;letter-spacing:.2px;">'
         f'<span style="color:{ACCENT};font-weight:600;letter-spacing:.8px;">来源</span>'
-        f' <span style="color:#C0C8D0;padding:0 4px;">/</span> <a class="digest-link" href="{esc(url)}" style="color:#718096;text-decoration:none;">{esc(label)}</a>'
+        f' <span style="color:#D0D5D8;padding:0 4px;">/</span> <a class="digest-link" href="{esc(url)}"{source_tracking_attrs(article_title)} style="color:#4E7A8A;text-decoration:underline;text-underline-offset:2px;font-weight:600;">{esc(label)}</a>'
         "</div>"
     )
 
@@ -1238,7 +1336,7 @@ def render_digest_metadata(item: dict[str, Any]) -> str:
     return (
         f'<div style="font-size:12px;line-height:1.55;color:{ACCENT};font-weight:600;'
         'letter-spacing:.45px;padding-top:8px;">'
-        + ' <span style="color:#B6C4D0;padding:0 4px;">/</span> '.join(parts)
+        + ' <span style="color:#C8CED1;padding:0 4px;">/</span> '.join(parts)
         + "</div>"
     )
 
@@ -1260,14 +1358,14 @@ def render_digest_section_header(
       <tr>
         <td style="padding:47px 44px 18px 44px;">
           {anchor_markup}
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-bottom:1px solid #D9E3EB;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-bottom:1px solid #E1E5E6;">
             <tr>
               <td style="padding:0 0 13px 0;">
                 <span style="font-size:18px;line-height:1.2;color:{ACCENT};font-weight:700;letter-spacing:.6px;">{esc(number)}</span>
-                <span style="font-size:20px;line-height:1.2;color:#243D4E;font-weight:600;padding-left:10px;">{esc(title)}</span>
-                <span style="font-size:11px;line-height:1;color:#8194A5;font-weight:600;letter-spacing:1.8px;padding-left:10px;">{esc(label)}</span>
+                <span style="font-size:20px;line-height:1.2;color:#343B40;font-weight:600;padding-left:10px;">{esc(title)}</span>
+                <span style="font-size:11px;line-height:1;color:#858E95;font-weight:600;letter-spacing:1.8px;padding-left:10px;">{esc(label)}</span>
               </td>
-              <td align="right" valign="bottom" style="padding:0 0 13px 0;font-size:12px;line-height:1;color:#657D8E;font-weight:700;white-space:nowrap;">{count} 篇</td>
+              <td align="right" valign="bottom" style="padding:0 0 13px 0;font-size:12px;line-height:1;color:#6E787F;font-weight:700;white-space:nowrap;">{count} 篇</td>
             </tr>
           </table>
         </td>
@@ -1283,7 +1381,7 @@ def render_digest_highlight_row(
     is_last: bool,
     anchor: str,
 ) -> str:
-    border = "" if is_last else "border-bottom:1px solid #E7EEF4;"
+    border = "" if is_last else "border-bottom:1px solid #ECEEEF;"
     link_style = "display:block;color:inherit;text-decoration:none;"
     return f"""
       <tr>
@@ -1293,11 +1391,11 @@ def render_digest_highlight_row(
               <td valign="top" width="42" style="padding-top:1px;font-size:12px;line-height:1.4;color:{ACCENT};font-weight:700;letter-spacing:.6px;">{esc(number)}</td>
               <td valign="top">
                 <a class="digest-toc-link" href="#{esc(anchor)}" style="{link_style}">
-                  <div class="digest-toc-title" style="font-size:14px;line-height:1.4;color:#2D4859;font-weight:700;">{esc(title)}</div>
-                  <div class="digest-toc-lead" style="font-size:13px;line-height:1.65;color:#708599;padding-top:4px;">{esc(lead)}</div>
+                  <div class="digest-toc-title" style="font-size:14px;line-height:1.4;color:#384147;font-weight:700;">{esc(title)}</div>
+                  <div class="digest-toc-lead" style="font-size:13px;line-height:1.65;color:#747E85;padding-top:4px;">{esc(lead)}</div>
                 </a>
               </td>
-              <td align="right" valign="top" width="36" style="font-size:12px;line-height:1.4;color:#738395;font-weight:700;white-space:nowrap;">{count}</td>
+              <td align="right" valign="top" width="36" style="font-size:12px;line-height:1.4;color:#737D84;font-weight:700;white-space:nowrap;">{count}</td>
             </tr>
           </table>
         </td>
@@ -1305,11 +1403,75 @@ def render_digest_highlight_row(
     """
 
 
-def render_digest_highlights(paper: dict[str, Any], groups: list[tuple[str, str, str, list[dict[str, Any]]]]) -> str:
-    entries: list[tuple[str, str, str, int, str]] = [
-        ("01", "研究前沿", str(paper.get("title") or ""), 1, "digest-research")
+def estimate_digest_reading_minutes(
+    data: dict[str, Any],
+    paper: dict[str, Any] | None,
+    groups: list[tuple[str, str, str, list[dict[str, Any]]]],
+) -> int:
+    """Estimate actual email reading time from rendered editorial content.
+
+    Source selection uses a separate, deliberately conservative reading budget.
+    The email header should instead reflect what the reader will actually scan.
+    """
+    explicit = data.get("reading_minutes")
+    try:
+        if explicit is not None and float(explicit) > 0:
+            return max(1, math.ceil(float(explicit)))
+    except (TypeError, ValueError):
+        pass
+
+    parts: list[str] = [
+        str(data.get("editor_note") or ""),
+        str(data.get("summary_headline") or ""),
+        str(data.get("summary") or ""),
     ]
-    for idx, (key, title, _, items) in enumerate(groups, start=2):
+    if paper:
+        parts.extend([str(paper.get("title") or ""), str(paper.get("audience") or "")])
+        parts.extend(str(tag) for tag in paper.get("tags", []) if tag)
+        for key in ("conclusion", "problem", "mechanism", "evidence", "insight"):
+            parts.append(str(paper.get(key) or ""))
+        if should_render_digest_boundary(paper, is_research=True):
+            parts.append(str(paper.get("boundary") or ""))
+
+    for _, _, _, items in groups:
+        for item in items:
+            parts.extend(
+                [
+                    str(item.get("title") or ""),
+                    str(item.get("one_liner") or ""),
+                    str(item.get("why") or ""),
+                    str(item.get("observation_label") or ""),
+                    str(item.get("observation") or ""),
+                ]
+            )
+            parts.extend(str(tag) for tag in item.get("tags", []) if tag)
+            if should_render_digest_boundary(item):
+                parts.append(str(item.get("boundary") or ""))
+
+    visible_characters = len("".join("".join(parts).split()))
+    # Fast email scanning is quicker than long-form reading; reserve one minute
+    # for the research image, section changes, and link-oriented scanning.
+    return max(3, math.ceil(visible_characters / 450) + 1)
+
+
+def render_digest_highlights(
+    data: dict[str, Any],
+    paper: dict[str, Any] | None,
+    groups: list[tuple[str, str, str, list[dict[str, Any]]]],
+) -> str:
+    research_section = ACTIVE_CONTENT_SECTIONS.get("research", {})
+    entries: list[tuple[str, str, str, int, str]] = []
+    if paper:
+        entries.append(
+            (
+                "01",
+                str(research_section.get("title") or "研究前沿"),
+                str(paper.get("title") or ""),
+                1,
+                str(research_section.get("anchor") or "digest-research"),
+            )
+        )
+    for idx, (key, title, _, items) in enumerate(groups, start=2 if paper else 1):
         entries.append(
             (
                 f"{idx:02d}",
@@ -1323,7 +1485,8 @@ def render_digest_highlights(paper: dict[str, Any], groups: list[tuple[str, str,
         render_digest_highlight_row(number, title, lead, count, idx == len(entries) - 1, anchor)
         for idx, (number, title, lead, count, anchor) in enumerate(entries)
     )
-    total = 1 + sum(len(items) for _, _, _, items in groups)
+    total = (1 if paper else 0) + sum(len(items) for _, _, _, items in groups)
+    reading_minutes = estimate_digest_reading_minutes(data, paper, groups)
     return f"""
       <tr>
         <td style="padding:30px 44px 0 44px;">
@@ -1332,8 +1495,8 @@ def render_digest_highlights(paper: dict[str, Any], groups: list[tuple[str, str,
               <td style="padding:18px 20px 4px 20px;">
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
                   <tr>
-                    <td style="font-size:16px;line-height:1.2;color:#294455;font-weight:600;">今日看点</td>
-                    <td align="right" style="font-size:12px;line-height:1.2;color:#7B90A1;white-space:nowrap;">{total} 篇内容 · 约 5 分钟</td>
+                    <td style="font-size:16px;line-height:1.2;color:#343E44;font-weight:600;">今日看点</td>
+                    <td align="right" style="font-size:12px;line-height:1.2;color:#778289;white-space:nowrap;">{total} 篇内容 · 约 {reading_minutes} 分钟</td>
                   </tr>
                 </table>
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:9px;">{rows}</table>
@@ -1349,8 +1512,8 @@ def render_digest_boundary(text: str) -> str:
     if not text:
         return ""
     return f"""
-      <div style="margin-top:11px;background:#F2F7FB;padding:10px 12px;font-size:12px;line-height:1.75;color:#718697;">
-        <strong style="color:{ACCENT_DARK};">边界提示：</strong>{esc(text)}
+      <div style="margin-top:11px;background:#F6F7F7;padding:10px 12px;font-size:12px;line-height:1.75;color:#737C82;">
+        <strong style="color:{ACCENT_DARK};">{esc(str(ACTIVE_EDITORIAL_POLICY.get('research_structure', {}).get('boundary_label', '边界提示')))}：</strong>{esc(text)}
       </div>
     """
 
@@ -1358,7 +1521,9 @@ def render_digest_boundary(text: str) -> str:
 def should_render_digest_boundary(item: dict[str, Any], *, is_research: bool = False) -> bool:
     """Keep caveats visible only when they materially change how an item is read."""
     if is_research:
-        return bool(str(item.get("boundary") or "").strip())
+        return bool(ACTIVE_EDITORIAL_POLICY.get("boundary", {}).get("render_research_boundary", True)) and bool(
+            str(item.get("boundary") or "").strip()
+        )
 
     boundary = str(item.get("boundary") or "").strip()
     if not boundary:
@@ -1369,28 +1534,12 @@ def should_render_digest_boundary(item: dict[str, Any], *, is_research: bool = F
             " ".join(str(tag) for tag in item.get("tags", [])),
         ]
     ).lower()
-    risk_cues = (
-        "安全",
-        "隐私",
-        "漏洞",
-        "泄露",
-        "攻击",
-        "恶意",
-        "供应链",
-        "权限",
-        "合规",
-        "法律",
-        "诉讼",
-        "争议",
-    )
-    source_uncertainty_cues = (
-        "传闻",
-        "未证实",
-        "非官方",
-        "内测",
-        "灰度",
-        "beta",
-        "preview",
+    boundary_policy = ACTIVE_EDITORIAL_POLICY.get("boundary", {})
+    if not boundary_policy.get("render_news_only_when_material", True):
+        return True
+    risk_cues = tuple(str(cue).lower() for cue in boundary_policy.get("risk_cues", []))
+    source_uncertainty_cues = tuple(
+        str(cue).lower() for cue in boundary_policy.get("source_uncertainty_cues", [])
     )
     return any(cue in topic_context for cue in risk_cues) or any(
         cue in boundary.lower() for cue in source_uncertainty_cues
@@ -1404,19 +1553,20 @@ def render_digest_research_detail(label: str, text: str) -> str:
       <tr>
         <td style="padding:0 0 16px 0;">
           <div style="font-size:12px;line-height:1.45;color:{ACCENT};font-weight:700;letter-spacing:.8px;padding-bottom:5px;">{esc(label)}</div>
-          <div style="font-size:14px;line-height:1.78;color:#4D6475;">{esc(text)}</div>
+          <div style="font-size:14px;line-height:1.78;color:#535C62;">{esc(text)}</div>
         </td>
       </tr>
     """
 
 
 def render_digest_research(paper: dict[str, Any]) -> str:
+    structure = ACTIVE_EDITORIAL_POLICY.get("research_structure", {})
     details = "".join(
         [
-            render_digest_research_detail("研究问题", paper_field(paper, "problem", "question")),
-            render_digest_research_detail("方法机制", paper_field(paper, "mechanism", "core_idea")),
-            render_digest_research_detail("关键证据", paper_evidence_text(paper)),
-            render_digest_research_detail("应用启发", paper_field(paper, "insight")),
+            render_digest_research_detail(str(structure.get("problem", "研究问题")), paper_field(paper, "problem", "question")),
+            render_digest_research_detail(str(structure.get("mechanism", "方法机制")), paper_field(paper, "mechanism", "core_idea")),
+            render_digest_research_detail(str(structure.get("evidence", "关键证据")), paper_evidence_text(paper)),
+            render_digest_research_detail(str(structure.get("insight", "应用启发")), paper_field(paper, "insight")),
         ]
     )
     boundary = ""
@@ -1425,13 +1575,13 @@ def render_digest_research(paper: dict[str, Any]) -> str:
     return f"""
       <tr>
         <td style="padding:0 44px 4px 44px;">
-          <div style="font-size:16px;line-height:1.5;color:#243D4E;font-weight:600;letter-spacing:.02px;">{esc(paper.get("title"))}</div>
+          <div style="font-size:16px;line-height:1.5;color:#30383D;font-weight:600;letter-spacing:.02px;">{esc(paper.get("title"))}</div>
           {render_digest_metadata(paper)}
-          {render_digest_sources(paper.get("links", []))}
+          {render_digest_sources(paper.get("links", []), paper.get("title"))}
           <div style="padding-top:16px;border:1px solid {ACCENT_BORDER};">
             <img src="{esc(paper.get('image'))}" width="590" alt="{esc(paper.get('image_alt'))}" style="display:block;width:590px;max-width:100%;height:auto;border:0;">
           </div>
-          <div style="font-size:14px;line-height:1.8;color:#385668;font-weight:600;padding-top:18px;">{esc(paper_field(paper, "conclusion", "one_liner"))}</div>
+          <div style="font-size:14px;line-height:1.8;color:#414B50;font-weight:600;padding-top:18px;">{esc(paper_field(paper, "conclusion", "one_liner"))}</div>
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:20px;">{details}</table>
           {boundary}
         </td>
@@ -1470,12 +1620,12 @@ def render_digest_story(item: dict[str, Any], is_last: bool) -> str:
     return f"""
       <tr>
         <td style="padding:0 44px {0 if is_last else 33}px 44px;">
-          <div style="font-size:16px;line-height:1.5;color:#263E4E;font-weight:600;letter-spacing:.02px;">{esc(item.get("title"))}</div>
+          <div style="font-size:16px;line-height:1.5;color:#30383D;font-weight:600;letter-spacing:.02px;">{esc(item.get("title"))}</div>
           {render_digest_metadata(item)}
-          {render_digest_news_source(str(item.get("url") or ""))}
-          <div style="font-size:14px;line-height:1.78;color:#4D6475;padding-top:12px;">{esc(item.get("one_liner"))}</div>
-          <div style="font-size:14px;line-height:1.8;color:#62798A;padding-top:10px;"><strong style="color:{ACCENT_DARK};">值得关注：</strong>{esc(item.get("why"))}</div>
-          <div style="font-size:14px;line-height:1.8;color:#62798A;padding-top:6px;"><strong style="color:{ACCENT_DARK};">{esc(observation_label(item))}：</strong>{esc(item.get("observation"))}</div>
+          {render_digest_news_source(str(item.get("url") or ""), item.get("title"))}
+          <div style="font-size:14px;line-height:1.78;color:#535C62;padding-top:12px;">{esc(item.get("one_liner"))}</div>
+          <div style="font-size:14px;line-height:1.8;color:#646E74;padding-top:10px;"><strong style="color:{ACCENT_DARK};">值得关注：</strong>{esc(item.get("why"))}</div>
+          <div style="font-size:14px;line-height:1.8;color:#646E74;padding-top:6px;"><strong style="color:{ACCENT_DARK};">{esc(observation_label(item))}：</strong>{esc(item.get("observation"))}</div>
           {boundary}
         </td>
       </tr>
@@ -1507,18 +1657,31 @@ def render_digest_group(
 
 def render_email_digest_navy(data: dict[str, Any]) -> str:
     research = research_items(data)
-    paper = research[0]
+    paper = research[0] if research else None
     groups = digest_news_groups(data.get("news", []))
     footer = data.get("footer", {})
     display_date = data.get("display_date") or data.get("date")
     issue = data.get("issue")
     summary_headline, summary_body = digest_summary_parts(data)
+    research_section = ACTIVE_CONTENT_SECTIONS.get("research", {})
     masthead_volume = str(issue) if issue else str(display_date).split()[0]
-    total = 1 + sum(len(items) for _, _, _, items in groups)
+    total = (1 if paper else 0) + sum(len(items) for _, _, _, items in groups)
     grouped_content = "".join(
         render_digest_group(index, key, title, label, items)
-        for index, (key, title, label, items) in enumerate(groups, start=2)
+        for index, (key, title, label, items) in enumerate(groups, start=2 if paper else 1)
     )
+    research_content = ""
+    if paper:
+        research_content = (
+            render_digest_section_header(
+                "01",
+                str(research_section.get("title") or paper.get("section_title", "研究前沿")),
+                str(research_section.get("label") or "RESEARCH"),
+                1,
+                anchor=str(research_section.get("anchor") or "digest-research"),
+            )
+            + render_digest_research(paper)
+        )
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1528,35 +1691,40 @@ def render_email_digest_navy(data: dict[str, Any]) -> str:
   <style type="text/css">
     .digest-link:hover {{ color:{ACCENT} !important; text-decoration:underline !important; }}
     .digest-toc-link:hover .digest-toc-title {{ color:{ACCENT} !important; }}
-    .digest-toc-link:hover .digest-toc-lead {{ color:#56758A !important; }}
+    .digest-toc-link:hover .digest-toc-lead {{ color:#576F79 !important; }}
+    @media only screen and (max-width:600px) {{
+      .digest-shell > tbody > tr > td {{ padding-left:20px !important; padding-right:20px !important; }}
+      .digest-shell img {{ width:100% !important; max-width:100% !important; height:auto !important; }}
+      .digest-shell {{ overflow-wrap:anywhere; }}
+    }}
   </style>
 </head>
-<body style="margin:0;padding:0;background:#F6F9FB;font-family:{FONT_STACK};color:#263E4E;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;background:#F6F9FB;margin:0;padding:28px 0;">
+<body style="margin:0;padding:0;background:#F5F6F6;font-family:{FONT_STACK};color:#30383D;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;background:#F5F6F6;margin:0;padding:28px 0;">
     <tr>
       <td align="center" style="padding:0 12px;">
-        <table role="presentation" width="680" cellpadding="0" cellspacing="0" style="width:680px;background:#FFFFFF;">
+        <table class="digest-shell" role="presentation" width="680" cellpadding="0" cellspacing="0" style="width:100%;max-width:680px;table-layout:fixed;background:#FFFFFF;">
           <tr>
             <td style="padding:34px 44px 0 44px;">
-              <div style="font-size:11px;line-height:1;color:#7B90A1;font-weight:700;letter-spacing:3px;">VOL.{esc(masthead_volume)} · {total} STORIES · AI SIGNAL DAILY</div>
-              <div style="font-size:30px;line-height:1.2;color:#203C4D;font-weight:600;letter-spacing:.15px;padding-top:24px;"><span style="color:{ACCENT};">AI</span> 情报雷达</div>
-              <div style="font-size:13px;line-height:1.8;color:#7B90A1;padding-top:14px;letter-spacing:.5px;">{esc(display_date)}　·　精选 AI 行业动态</div>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:28px;"><tr><td style="height:3px;background:{ACCENT_DARK};font-size:0;line-height:0;">&nbsp;</td></tr><tr><td style="height:3px;background:#F4F7FA;font-size:0;line-height:0;">&nbsp;</td></tr><tr><td style="height:1px;background:{ACCENT};font-size:0;line-height:0;">&nbsp;</td></tr></table>
+              <div style="font-size:11px;line-height:1;color:#7B858C;font-weight:700;letter-spacing:3px;">VOL.{esc(masthead_volume)} · {total} STORIES · AI SIGNAL DAILY</div>
+              <div style="font-size:30px;line-height:1.2;color:#2E383E;font-weight:600;letter-spacing:.15px;padding-top:24px;"><span style="color:{ACCENT};">AI</span> 情报雷达</div>
+              <div style="font-size:13px;line-height:1.8;color:#7C858B;padding-top:14px;letter-spacing:.5px;">{esc(display_date)}　·　精选 AI 行业动态</div>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:28px;"><tr><td style="height:3px;background:{ACCENT_DARK};font-size:0;line-height:0;">&nbsp;</td></tr><tr><td style="height:3px;background:#F0F2F2;font-size:0;line-height:0;">&nbsp;</td></tr><tr><td style="height:1px;background:{ACCENT};font-size:0;line-height:0;">&nbsp;</td></tr></table>
             </td>
           </tr>
-          {render_digest_highlights(paper, groups)}
-          {render_digest_section_header("01", paper.get("section_title", "研究前沿"), "RESEARCH", 1, anchor="digest-research")}
-          {render_digest_research(paper)}
+          {render_digest_highlights(data, paper, groups)}
+          {render_feedback_block()}
+          {research_content}
           {grouped_content}
           <tr>
             <td style="padding:56px 44px 0 44px;">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #D5E5EF;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #E1E5E6;">
                 <tr>
                   <td style="padding-top:22px;">
-                    <div style="font-size:11px;line-height:1;color:{ACCENT};font-weight:700;letter-spacing:1.7px;">今日主线 <span style="color:#8A9EAE;font-weight:600;letter-spacing:1.35px;padding-left:5px;">EDITOR'S TAKE</span></div>
+                    <div style="font-size:11px;line-height:1;color:{ACCENT};font-weight:700;letter-spacing:1.7px;">今日主线 <span style="color:#89939A;font-weight:600;letter-spacing:1.35px;padding-left:5px;">EDITOR'S TAKE</span></div>
                     <div style="border-left:4px solid {ACCENT};margin-top:13px;padding:0 0 2px 16px;">
-                      <div style="font-size:17px;line-height:1.55;color:#243D4E;font-weight:600;letter-spacing:.02px;">{esc(summary_headline)}</div>
-                      <div style="font-size:14px;line-height:1.85;color:#62798A;padding-top:10px;">{esc(summary_body)}</div>
+                      <div style="font-size:17px;line-height:1.55;color:#343D42;font-weight:600;letter-spacing:.02px;">{esc(summary_headline)}</div>
+                      <div style="font-size:14px;line-height:1.85;color:#626C72;padding-top:10px;">{esc(summary_body)}</div>
                     </div>
                   </td>
                 </tr>
@@ -1565,9 +1733,9 @@ def render_email_digest_navy(data: dict[str, Any]) -> str:
           </tr>
           <tr>
             <td style="padding:26px 44px 36px 44px;">
-              <div style="font-size:12px;line-height:1.6;color:#62798A;font-weight:700;">{esc(footer.get("title", "试运行说明"))}</div>
-              <div style="font-size:12px;line-height:1.8;color:#8194A5;padding-top:7px;">{esc(footer.get("body", ""))}</div>
-              <div style="font-size:12px;line-height:1.8;color:#8194A5;padding-top:9px;">{esc(footer.get("name", ""))}｜<a href="mailto:{esc(footer.get("email", ""))}" style="color:{ACCENT};text-decoration:underline;">{esc(footer.get("email", ""))}</a></div>
+              <div style="font-size:12px;line-height:1.6;color:#626C72;font-weight:700;">{esc(footer.get("title", "试运行说明"))}</div>
+              <div style="font-size:12px;line-height:1.8;color:#7A858C;padding-top:7px;">{esc(footer.get("body", ""))}</div>
+              <div style="font-size:12px;line-height:1.8;color:#7A858C;padding-top:9px;">{esc(footer.get("name", ""))}｜<a href="mailto:{esc(footer.get("email", ""))}" style="color:{ACCENT};text-decoration:underline;">{esc(footer.get("email", ""))}</a></div>
             </td>
           </tr>
         </table>
@@ -1587,7 +1755,7 @@ def render_email(data: dict[str, Any]) -> str:
     if CURRENT_THEME == "editorial_mono":
         return render_email_editorial_mono(data)
     research = research_items(data)
-    paper = research[0]
+    paper = research[0] if research else None
     news_items = data.get("news", [])
     if NEWS_LAYOUT == "paper":
         news = render_news_list_paper(news_items)
@@ -1595,7 +1763,18 @@ def render_email(data: dict[str, Any]) -> str:
         news = "\n".join(render_news_card(item, idx + 1) for idx, item in enumerate(news_items))
     footer = data.get("footer", {})
     news_section = data.get("news_section", {})
-    paper_section_title = paper.get("section_title", "研究前沿")
+    research_content = ""
+    if paper:
+        research_content = (
+            render_section_heading(
+                paper.get("section_title", "研究前沿"),
+                "把前沿方法转译成可理解、可讨论的工作启发",
+                "RESEARCH PICK",
+                "01",
+            )
+            + render_research_cards(research)
+        )
+    news_number = "02" if paper else "01"
     display_date = data.get("display_date") or data.get("date")
 
     return f"""<!doctype html>
@@ -1654,11 +1833,9 @@ def render_email(data: dict[str, Any]) -> str:
             </td>
           </tr>
 
-          {render_section_heading(paper_section_title, "把前沿方法转译成可理解、可讨论的工作启发", "RESEARCH PICK", "01")}
+          {research_content}
 
-          {render_research_cards(research)}
-
-          {render_section_heading(news_section.get("title", "行业动态"), news_section.get("subtitle", ""), "INDUSTRY SIGNALS", "02")}
+          {render_section_heading(news_section.get("title", "行业动态"), news_section.get("subtitle", ""), "INDUSTRY SIGNALS", news_number)}
 
           {news}
 
@@ -1674,6 +1851,8 @@ def render_email(data: dict[str, Any]) -> str:
               </table>
             </td>
           </tr>
+
+          {render_feedback_block()}
 
           <tr>
             <td style="padding:0 34px 30px 34px;">
@@ -1705,7 +1884,7 @@ def main() -> None:
     parser.add_argument("--output", required=True, type=Path, help="Path to output HTML.")
     parser.add_argument(
         "--theme",
-        default="clay_orange",
+        default=DEFAULT_THEME,
         choices=sorted(THEMES),
         help="Visual theme name.",
     )
