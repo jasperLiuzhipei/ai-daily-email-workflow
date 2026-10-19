@@ -5,13 +5,13 @@ Wants=network-online.target time-sync.target
 
 [Service]
 Type=oneshot
-User=ths
-Group=ths
-WorkingDirectory=/home/ths/ai-daily
-EnvironmentFile=/home/ths/ai-daily/ai_daily_workflow/.env
+User=ai-daily
+Group=ai-daily
+WorkingDirectory=/opt/ai-daily
+EnvironmentFile=/opt/ai-daily/ai_daily_workflow/.env
 Environment=PYTHONUNBUFFERED=1
 # Three total attempts are persisted by the workflow; systemd must not multiply them.
-ExecStart=/home/ths/ai-daily/.venv/bin/python /home/ths/ai-daily/ai_daily_workflow/scripts/run_ai_daily.py publish-reviewed --scheduled --refresh-api-content --refresh-api-image --theme digest_navy --news-layout paper
+ExecStart=/opt/ai-daily/.venv/bin/python /opt/ai-daily/ai_daily_workflow/scripts/run_ai_daily.py publish-reviewed --scheduled --refresh-api-content --refresh-api-image --theme digest_navy --news-layout paper
 Restart=no
 TimeoutStartSec=6h
 UMask=0077

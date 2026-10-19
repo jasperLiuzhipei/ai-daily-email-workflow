@@ -36,7 +36,7 @@
 - 正式服务器：**82项相关测试通过**，覆盖事件评分、真实CLI编排的受控输入、正文缓存、预算、研究独立期次、展示边界、漏选复核、回流、发布回滚和基线漂移。
 - 真实评分网关冒烟验证：使用已归档的GitHub文章正文，完成1个事件评估，0个待处理事件，选择1条研究。真实网关请求1次，耗时63.173秒，报告输入5014、输出2655 tokens。材料读取为历史回放，因此这项验证不代表重新在线抓取该文章，也不是整期内容生成测试。
 - 本次部署34个代码、配置与测试文件；文档和选源提示词另行同步。代码发布清单和结果保留文件摘要值。
-- 正式服务器代码备份：`/home/ths/ai-daily/deploy_backups/source_release_20260918T080527260364Z`。
+- 正式服务器代码备份：`/opt/ai-daily/deploy_backups/source_release_20260918T080527260364Z`。
 - 部署采用逐文件替换和失败回滚；不宣称整个目录在同一瞬间原子切换。
 
 本地审计证据位于 `tmp/debt_cleanup_20260918/`：`deployment_result.json`、`release/manifest.json`、`server_gateway_smoke.log`、`calibration_labels.template.json`、`calibration_status.json`。全量测试日志为 `/tmp/debt_final_tests.log`。

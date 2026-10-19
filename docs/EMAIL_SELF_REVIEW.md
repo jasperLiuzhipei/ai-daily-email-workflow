@@ -39,7 +39,7 @@ SMTP 投递失败另发一次编辑告警，但不自动整期重发。已有投
 
 策略文件为 `config/email_quality_policy.json`，保存审核范围 `review_scope=final_copy_and_visual_handoff`、重试参数和告警邮箱的配置来源，不保存凭据。
 
-`ai_review_enabled` 是实际联网审查开关。`automatic_send_enabled` 是自动正式发送开关，配合 `automatic_send_authorization` 记录用户授权；两项均已按本次用户授权启用。自动发送入口要求两个开关都为 true，任一关闭都不能自动发信。
+`ai_review_enabled` 是实际联网审查开关。`automatic_send_enabled` 是自动正式发送开关，配合 `automatic_send_authorization` 记录部署方授权。开源版本默认启用审核、关闭自动发送，授权字段为空；部署方验证配置和测试名单后，才能自行启用自动发送并填写授权记录。自动发送入口要求两个开关都为 true，任一关闭都不能自动发信。历史部署曾按当时授权启用自动发送；本次开源默认值不修改已有服务器配置。
 
 每期 `daily_runs/YYYY-MM-DD/` 保存：
 

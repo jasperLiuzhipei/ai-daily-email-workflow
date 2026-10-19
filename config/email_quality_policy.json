@@ -2,8 +2,8 @@
   "schema_version": 1,
   "ai_review_enabled": true,
   "review_scope": "final_copy_and_visual_handoff",
-  "automatic_send_enabled": true,
-  "automatic_send_authorization": "2026-10-12: user authorized sending to the existing production list automatically after successful AI review",
+  "automatic_send_enabled": false,
+  "automatic_send_authorization": "",
   "max_attempts": 3,
   "retry_delays_seconds": [
     30,

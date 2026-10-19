@@ -1,6 +1,6 @@
 # 事件选源首版发布记录
 
-状态：已部署 `event-editorial-v2.1`。正式运行目录：`/home/ths/ai-daily/ai_daily_workflow`。
+状态：已部署 `event-editorial-v2.1`。正式运行目录：`/opt/ai-daily/ai_daily_workflow`。
 
 - 默认 `select/prepare` 已接入事件正文评分；从2026-09-19期起生产发送要求新评分与覆盖复核。
 - 初次20个文件，后补原文跳转URL和相关测试2个文件；文件Hash均由安装程序核对。
@@ -12,8 +12,8 @@
 
 备份：
 
-- `/home/ths/ai-daily/deploy_backups/event_editorial_20260918_153132`
-- `/home/ths/ai-daily/deploy_backups/event_editorial_20260918_153556`
+- `/opt/ai-daily/deploy_backups/event_editorial_20260918_153132`
+- `/opt/ai-daily/deploy_backups/event_editorial_20260918_153556`
 
 每个备份目录保存部署清单、旧文件和 `deployment_result.json`。安装器在测试失败时自动恢复；未来人工回滚须按后补→初次的倒序并核对后续修改，不能直接覆盖较新的用户工作。
 

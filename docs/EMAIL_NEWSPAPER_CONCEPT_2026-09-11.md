@@ -22,8 +22,8 @@
 
 ## 文件与范围
 
-- 独立方案：`/Users/jasperliuzp/.codex/visualizations/2026/09/10/01a08937-3cf9-71f3-afc7-e30ec36ce848/email-newspaper.html`
-- 原版：`/Users/jasperliuzp/.codex/visualizations/2026/09/10/01a08937-3cf9-71f3-afc7-e30ec36ce848/email-research-editorial.html`
+- 独立方案：`/path/to/local-previews/2026/09/10/01a08937-3cf9-71f3-afc7-e30ec36ce848/email-newspaper.html`
+- 原版：`/path/to/local-previews/2026/09/10/01a08937-3cf9-71f3-afc7-e30ec36ce848/email-research-editorial.html`
 - 本次创建前后原版 SHA-256 均为 `7549a16ddafffd881bc22367b511d484398e37432b39983e993971036be49be7`。
 - 当前使用浏览器展示能力，包括容器查询和字体切换；正式邮件落地仍需转换布局、字体回退及客户端验收。本次未修改生产渲染器、部署或发送邮件。
 

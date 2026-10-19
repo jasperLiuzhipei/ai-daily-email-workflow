@@ -39,7 +39,7 @@
 
 ## 文件与操作
 
-默认状态目录：`/home/ths/ai-daily/runtime_state/model_updates/`。
+默认状态目录：`/opt/ai-daily/runtime_state/model_updates/`。
 
 - `catalog.json`：最近一次成功模型目录、增删差异、时间与网关标识。
 - `last_check.json`：最近一次执行及候选状态、预算预留。
@@ -56,7 +56,7 @@ systemctl --user list-timers ai-daily-model-update.timer
 journalctl --user -u ai-daily-model-update.service -n 40 --no-pager
 
 # 只刷新目录，不评测、不切换
-cd /home/ths/ai-daily
+cd /opt/ai-daily
 .venv/bin/python ai_daily_workflow/scripts/update_text_models.py --refresh-only
 
 # 暂停自动更新（已有日报继续运行）

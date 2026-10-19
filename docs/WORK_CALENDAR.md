@@ -22,7 +22,7 @@ python ai_daily_workflow/scripts/work_calendar.py --date 2026-09-20
 
 ## 部署状态
 
-用户明确授权后，运行脚本与日历已于 2026-09-20 部署到 ths@192.168.2.219，服务器 9 项日历测试和休假日 CLI 验证通过。备份：/home/ths/ai-daily/deploy_backups/work_calendar_20260920T054610Z。用户完成管理员安装后，已远程核验系统定时器正式生效：制作 timer 为每天 08:30 Asia/Shanghai，enabled 且 active；prepare/preview 均带 --scheduled。下次触发为 2026-09-21 08:30 CST。自动发送 timer 保持 disabled 且 inactive。日历实测 2026-09-20 为补班日、2026-09-25 为休假日。
+用户明确授权后，运行脚本与日历已于 2026-09-20 部署到 ai-daily@your-server.example.com，服务器 9 项日历测试和休假日 CLI 验证通过。备份：/opt/ai-daily/deploy_backups/work_calendar_20260920T054610Z。用户完成管理员安装后，已远程核验系统定时器正式生效：制作 timer 为每天 08:30 Asia/Shanghai，enabled 且 active；prepare/preview 均带 --scheduled。下次触发为 2026-09-21 08:30 CST。自动发送 timer 保持 disabled 且 inactive。日历实测 2026-09-20 为补班日、2026-09-25 为休假日。
 
 部署需先备份服务端文件，并针对服务器现有 run_ai_daily.py / auto_publish.py 应用本次局部补丁，不覆盖本地其他未发布变更。更新 scripts/work_calendar.py 和 config/work_calendar.json。制作 service 保留现有参数，只为 prepare、preview 增加 --scheduled。两个 timer 使用本地模板中的每天触发与 Asia/Shanghai 显式时区。
 
@@ -33,7 +33,7 @@ python ai_daily_workflow/scripts/work_calendar.py --date 2026-09-20
 在本机终端执行以下命令，并在服务器的 sudo 提示中输入管理员密码（不要在聊天中发送密码）：
 
 ```sh
-ssh -t ths@192.168.2.219 'sudo sh /home/ths/ai-daily/deploy_staging/work_calendar_20260920/install_units.sh'
+ssh -t ai-daily@your-server.example.com 'sudo sh /opt/ai-daily/deploy_staging/work_calendar_20260920/install_units.sh'
 ```
 
 脚本安装暂存的三个 unit，重载 systemd 并重启原已启用的制作 timer，输出下一次触发时间和两个 timer 的启用状态；自动发送仍保持 disabled。每天 08:30 Asia/Shanghai 的表达式已由服务器 systemd-analyze calendar 验证有效。

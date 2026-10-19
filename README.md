@@ -1,36 +1,40 @@
 # AI Daily Email Workflow
 
-> 当前正式选源规则：[事件评分与选源逻辑](docs/SOURCE_SELECTION_LOGIC.md)。2026-09-18 起默认使用正文事件评分；这与下方 `daily_v2` 的中台影子工作区是两项不同改造。
+**English** | [简体中文](README.zh-CN.md)
 
-> 新版开发入口：[`docs/V2_SHADOW_RELEASE.md`](docs/V2_SHADOW_RELEASE.md)。V2 影子工作区已可运行；现有正式制作与发送入口保持原状态。完整需求基线为 PRD 1.4。
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-面向内部 AI 情报日报的可部署邮件工作流：选源、API 内容 JSON、研究图质量门禁、Foxmail 兼容 HTML、CID 内联图片和受控 SMTP 发送。
+An AI newsletter workflow that selects sources, writes evidence-grounded briefs, reviews the final copy and research visuals, and delivers HTML email with inline images and optional reader feedback.
 
-2026-10-12 新增[邮件 AI 自审与失败恢复](docs/EMAIL_SELF_REVIEW.md)：定时生成和正式发送前审查最终邮件，最多 3 轮尝试，耗尽后仅向编辑邮箱发送原因和建议。
+The repository includes the editorial pipeline, deployment templates, a Python/SQLite feedback service, and a Next.js/Supabase feedback app. Documentation entry points are available in English and Chinese. The bundled editorial prompts, newsletter templates, and feedback interfaces currently target Chinese readers; translating the documentation does not change the generated newsletter's language.
 
-2026-10-19 更新[采集、审核输入与 trace 计数](docs/TRACE_OPTIMIZATION_2026-10-19.md)：修复压缩 RSS 解析，保留证据文本并压缩审核元数据，明确区分待评估与已评估暂缓。原模型独立复审通过，当期输入 token 实测减少 28.26%。新闻数量策略见[新闻预算](docs/NEWS_VOLUME_BUDGET.md)。
-
-## 保留的主链
+## How it works
 
 ```text
-Source selection -> API editorial JSON -> Research image -> HTML -> CID package -> SMTP send
+Source discovery → Event assessment → Evidence collection → Editorial JSON
+                                                           ↓
+                       Research visuals → HTML email → Final review
+                                                           ↓
+                                    CID package → SMTP delivery → Feedback
 ```
 
-- 选源：AIHot 主/全量/论文 feed、AIHot Daily 编辑预筛、BestBlogs 和配置化官方研究源。
-- 内容：研究前沿使用结构化解读；新闻使用轻量但带业务启发的桥接字段。
-- 图片：只为研究前沿生成；图片必须通过来源、Prompt、Hash 与人工质检门禁。
-- 邮件：研究图被打包为 CID 内联附件；启用反馈后按收件人生成匿名个性化邮件，阅读像素和来源链接埋点是仅有的远程请求。
-- 去重：只以成功正式发送的日报作为下一期新闻去重基线。
+- **Source selection:** configurable feeds, primary-source checks, event grouping, publication-history deduplication, and a news volume budget.
+- **Editorial generation:** detailed research readings and shorter news briefs, with evidence attribution and explicit boundaries.
+- **Review:** final-copy and visual checks, bounded recovery, saved inputs, immutable review history, and artifact hashes.
+- **Email:** table-based HTML for mail clients, CID image attachments, frozen recipient snapshots, and delivery records that prevent accidental resends.
+- **Feedback:** optional ratings, comments, estimated opens, filtered source clicks, and an authenticated dashboard.
+- **Operations:** workday calendars, per-issue locks, deployment templates, and traceable workflow state.
 
-## 仓库边界
+The main workflow is the production path. `scripts/daily_v2/` is a separate shadow implementation; see the [documentation index](docs/README.md) for its status and historical design notes.
 
-这个仓库只保存代码、提示词、模板和示例配置。
+## Quick start
 
-不提交：真实 SMTP 配置、收件名单、密码、日报运行产物、研究图、HTML、EML 和日志。它们由本地运行目录或未来中台的对象存储保存。
-
-## 首次配置
+Use Python 3.11 or later and `curl`. The optional web feedback app also needs Node.js and npm. Configure model names and request parameters for your provider; the supplied names are configuration examples, not a guarantee of provider availability.
 
 ```bash
+git clone https://github.com/jasperLiuzhipei/ai-daily-email-workflow.git ai_daily_workflow
+cd ai_daily_workflow
+
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -42,134 +46,160 @@ cp config/ai_runtime.example.json config/ai_runtime.json
 cp .env.example .env
 ```
 
-选源策略、读者画像、栏目和编辑规则已分别放在 `selection_policy.json`、`audience_profiles.json`、`content_sections.json`、`editorial_policy.json`。这些文件不含密钥，可随代码版本管理；字段说明见 [配置说明](docs/CONFIGURATION.md)。
-
-Python 依赖见 `requirements.txt`；系统还需要 `curl` 用于抓取公开 RSS/HTML 源。文本和图片的 API 运行时配置见 [API Runtime](docs/API_RUNTIME.md)，当前示例默认使用 `gpt-6-sol` 与 `gpt-image-2`。
-
-## 每日入口
+Edit the local files with your SMTP settings, test recipients, editor information, and API configuration. Store credentials in environment variables or the ignored `.env` file. The API adapter supports separate text and image endpoints using an OpenAI-compatible request format.
 
 ```bash
-# 查看某期工作流文件是否齐全
-python3 scripts/run_ai_daily.py status --date YYYY-MM-DD
-
-# 创建或查看该期的运行状态单；已有本地文件会首次自动回填到状态单
-python3 scripts/run_ai_daily.py state --date YYYY-MM-DD
-
-# 仅检查测试/正式名单组的状态、版本、人数和指纹，不显示邮箱
-python3 scripts/run_ai_daily.py recipients
-
-# 检查文本与图片模型的本地配置，不发网络请求
+# Validate local configuration without calling the provider.
 python3 scripts/run_ai_daily.py check-api
 
-# 安全写入本地中转 Key；终端隐藏输入，Key 不进入命令历史
-python3 scripts/configure_ai_runtime.py --base-url https://<approved-gateway>/v1
+# Enter a provider key through a hidden terminal prompt.
+python3 scripts/configure_ai_runtime.py --base-url https://your-gateway.example.com/v1
 
-# 文本和生图使用不同中转时，分别写入各自的 Key 与地址
-python3 scripts/configure_ai_runtime.py --scope text --base-url https://<text-gateway>/v1
-python3 scripts/configure_ai_runtime.py --scope image --base-url https://<image-gateway>/v1
+# Or configure text and image providers separately.
+python3 scripts/configure_ai_runtime.py --scope text --base-url https://text.example.com/v1
+python3 scripts/configure_ai_runtime.py --scope image --base-url https://images.example.com/v1
+```
 
-# 只诊断某一个通道，避免另一侧暂时不可用时混淆结果
-python3 scripts/run_ai_daily.py check-api --kind image --live-models
+API examples use `gpt-6-sol` and `gpt-image-2`; adjust model IDs, image sizes, and request defaults to match your provider. Source policies, audience profiles, content sections, editorial rules, and calendars are versioned in `config/`. Detailed field references are linked from the [documentation index](docs/README.md).
 
-# 自动选源：按内容价值、证据准入和新闻预算选择，不补最低条数
-python3 scripts/run_ai_daily.py select --date YYYY-MM-DD
+### Prepare and preview
 
-# 一次完成选源、一手源抓取、配置的文本模型内容和 gpt-image-2 候选图
+Replace `YYYY-MM-DD` with the issue date. Generation commands call configured external providers and can incur charges.
+
+```bash
+# Inspect the issue and recipient-group metadata.
+python3 scripts/run_ai_daily.py status --date YYYY-MM-DD
+python3 scripts/run_ai_daily.py recipients
+
+# Select sources, fetch evidence, draft content, and generate a research image.
 python3 scripts/run_ai_daily.py prepare --date YYYY-MM-DD
 
-# 将候选图放入比较版 HTML；不会批准图片或写正式发送记录
+# Render a comparison preview without recording a production delivery.
 python3 scripts/run_ai_daily.py preview --date YYYY-MM-DD --theme digest_navy --news-layout paper
 
-# 日报研究图默认使用 1920x1080；单次任务可临时覆盖画布
-python3 scripts/run_ai_daily.py api-image --date YYYY-MM-DD --image-size 1920x1080 --refresh-api-image
+# Inspect the per-issue workflow state.
+python3 scripts/run_ai_daily.py state --date YYYY-MM-DD
+```
 
-# 内容定稿后，诊断自动选源与最终发布之间的差异，并生成编辑复盘模板
-python3 scripts/run_ai_daily.py diagnose --date YYYY-MM-DD
+Research images use a configured canvas, with `1920x1080` in the current example. A one-run override is available through `api-image --image-size ... --refresh-api-image`. Provider output dimensions are recorded separately from the requested size.
 
-# 仅将“已完成编辑复盘”的期次汇总为评分回放集
-python3 scripts/run_ai_daily.py replay
+### Review and send
 
-# 在内容 JSON 与研究图审核完成后构建 HTML
+Public defaults keep `automatic_send_enabled` **false** in `config/email_quality_policy.json`, with an empty authorization record. Automatic delivery requires a deployment-specific opt-in after configuring and verifying test recipients. Installing the source code does not enable a system scheduler.
+
+```bash
+# Build after the content and required research-image checks are complete.
 python3 scripts/run_ai_daily.py build --date YYYY-MM-DD --theme digest_navy --news-layout paper
 
-# 发测试邮件
+# Send only to the configured test group.
 python3 scripts/run_ai_daily.py test --date YYYY-MM-DD --skip-build --ask-password --send
 
-# 正式发送：必须明确确认，成功后才写入去重与期数记录
+# Explicitly send to the configured production group.
 python3 scripts/run_ai_daily.py prod --date YYYY-MM-DD --skip-build --ask-password --send --confirm-prod
 ```
 
-每次 HTML 构建完成后，脚本会打印对应日期的正式发送命令。
+Final-copy and visual gates apply to delivery. An already published issue is protected against another production send; `--allow-resend-prod` is reserved for an intentional resend. SMTP acceptance is recorded separately from any claim that a message reached the recipient's inbox.
 
-每个期次还有一份 `daily_runs/YYYY-MM-DD/workflow_run.json`。它记录稳定的 `run_id`、阶段、文件 Hash、冻结名单快照元数据和发送结果，但不记录邮箱、密码或正文。正式邮件已成功发送的日期默认拒绝再次群发；只有确认需要补发时，才额外加 `--allow-resend-prod`。
+Each issue has a `daily_runs/YYYY-MM-DD/workflow_run.json` containing its stable run ID, stages, artifact hashes, recipient-snapshot metadata, and delivery status. Actual addresses and personalized messages remain in private runtime files.
 
-## 收件人名单
+## Recipients and publication history
 
-`config/recipients.json` 支持名单组 ID、版本、启用状态和成员信息。每次邮件打包会在包内生成不可变的 `recipient_snapshot.json`；发送和发送记录都使用这份快照，因此不会因打包后的名单变动而错发。
+`config/recipients.json` stores versioned, enabled recipient groups. Packaging creates an immutable `recipient_snapshot.json`; delivery uses that snapshot rather than a list that might change mid-run. Increment a group's version when changing its membership.
 
-本地旧格式仍能运行，但会显示为 `legacy v0`。中台部署前应迁移到示例文件中的 `schema_version: 1` 格式，并在每次修改成员时递增对应名单组的 `version`。
-
-现有旧名单可以原样迁移并自动备份：
+Legacy recipient files can be migrated with a local backup:
 
 ```bash
 python3 scripts/migrate_recipient_registry.py --write
 ```
 
-字段和未来数据库映射见 [收件人名单说明](docs/RECIPIENT_REGISTRY.md)。
+Only successfully published issues advance publication history. Previewing an issue does not advance the deduplication cutoff.
 
-## 选源质量诊断
-
-每期定稿后运行 `diagnose`。它会生成：
-
-- `selection_diagnostic.json`：自动选择、最终发布、未选池补入、手工未入池来源、自动选中但未发布、重复守卫被覆盖等差异。
-- `selection_review.json`：编辑复盘模板。只需记录真正的漏选、高价值补入、误判重复和评分原因。
-
-编辑将 `review_status` 改为 `completed` 后，运行 `replay` 才会把该期进入 `selection_replay.jsonl`。这份回放集用于调整评分和 Prompt，不直接自动改规则。
-
-详见 [选源质量说明](docs/SELECTION_QUALITY.md)。
-
-## 图像 Provider
-
-- `codex_imagegen`：当前效果基线，仅适用于 Codex 本地工作流。
-- `gpt_image_2` / `image2`：中台运行 Provider，目前仍处于质量候选阶段；必须经过 A/B 与单图质量审核，默认不能正式群发。
-- Image2 的稳定性测试使用同一份研究图 Prompt 连续生成三次，输出候选图、拼图和 `stability_report.json`；它不改 HTML、不写正式图片资产、更不会发送邮件。
-
-详见 [Image Provider Rollout](docs/image_provider_rollout.md) 与 [API Runtime](docs/API_RUNTIME.md)。
-
-## 中台部署
-
-P0 的目标是把这套流程部署成“可预览、可审批、可发送”的任务服务，不是立刻重做成知识库产品。状态机、密钥管理、最小留存和验收标准见 [中台部署说明](docs/MIDDLE_PLATFORM_HANDOFF.md)。
-
-## 反馈服务 P0
-
-反馈服务有两个兼容实现：
-
-- `feedback_service/`：Python + SQLite，本地开发或公司中台持久卷部署。
-- `feedback_web/`：Next.js + Supabase Postgres，面向 Vercel 的前后端线上版。
-
-两者都提供邮件打开估算、来源链接无感跳转埋点、星级自动提交、同一期匿名去重、改分 Upsert、独立可选文本评价和管理后台。点击会过滤明显预取和安全扫描请求，后台以“有效点击”展示。邮件包启用反馈后，会生成 `messages/` 下的一人一封 EML；SMTP 发送器自动复用一个连接逐封发送。顶层 EML 和 `body.html` 只用于预览，不带追踪，避免检查邮件时污染数据。
-
-启用前必须先把服务部署到员工邮箱客户端可访问的内部 HTTPS 地址，然后配置：
+## Editorial diagnostics
 
 ```bash
-export AI_DAILY_FEEDBACK_BASE_URL='https://<平台分配的 HTTPS 域名>'
+# Compare selected sources with the final issue and create a review worksheet.
+python3 scripts/run_ai_daily.py diagnose --date YYYY-MM-DD
+
+# Aggregate worksheets whose review_status is completed.
+python3 scripts/run_ai_daily.py replay
+```
+
+Diagnostics distinguish missing material, selection-to-publication differences, and editorial deferrals. Replay data supports policy evaluation without automatically changing selection rules.
+
+On the 2026-10-19 validation issue, compacting duplicate review metadata preserved the evidence text and reduced measured input tokens from **91,584 to 65,702 (28.26%)**. A single follow-up with the original reviewer passed all six checks. This is a measured result for one issue, not an estimate of universal savings or a benchmark of long-term review quality. See the [trace optimization note (Chinese)](docs/TRACE_OPTIMIZATION_2026-10-19.md).
+
+## Optional feedback services
+
+| Implementation | Storage | Deployment | Guide |
+| --- | --- | --- | --- |
+| Python service | SQLite | Local development or a server/container with a persistent volume | [English](feedback_service/README.md) · [中文](feedback_service/README.zh-CN.md) |
+| Next.js app | Supabase Postgres | Vercel or a compatible Node.js deployment | [English](feedback_web/README.md) · [中文](feedback_web/README.zh-CN.md) |
+
+Both implementations use signed links and issue-scoped pseudonymous recipient IDs. Enabling feedback creates one personalized EML per recipient; the top-level EML and `body.html` remain previews without tracking. Estimated opens and filtered clicks are imperfect engagement measurements, not proof of reading.
+
+The mail packager and feedback service must share the same signing secret:
+
+```bash
+export AI_DAILY_FEEDBACK_BASE_URL='https://feedback.example.com'
 export AI_DAILY_FEEDBACK_SECRET='<secret-store-value>'
-export AI_DAILY_FEEDBACK_ADMIN_KEY='<admin-key>'
+export AI_DAILY_FEEDBACK_ADMIN_KEY='<separate-admin-key>'
 python3 scripts/run_ai_daily.py package-test --date YYYY-MM-DD --require-feedback
 ```
 
-设置公开域名后，邮件打包会自动启用反馈；正式发送完成后还会同步发送人数供后台计算参与率。
-本地运行见 [Python 反馈服务说明](feedback_service/README.md)；Vercel + Supabase
-逐步部署见 [线上反馈服务说明](feedback_web/README.md)。
+Use an HTTPS address reachable by your recipients. Follow the relevant guide for storage, administrator authentication, delivery-count synchronization, and privacy considerations.
 
-## 项目结构
+## Deployment
+
+The files in `deploy/systemd/` are templates. They assume a dedicated `ai-daily` account and this layout:
 
 ```text
-config/     source and provider configuration; local mail config stays ignored
-docs/       deployment, image-provider, and workflow notes
-feedback_service/ local/container feedback implementation
-feedback_web/ Vercel + Supabase feedback implementation
-prompts/    source-selection and editorial JSON prompts
-scripts/    deterministic selection, validation, rendering, CID packaging, and send scripts
-templates/  manual source-manifest example
+/opt/ai-daily/
+├── .venv/
+├── ai_daily_workflow/     # this repository
+├── daily_runs/
+├── output/
+└── email_packages/
 ```
+
+Adapt the account, paths, environment file, work calendar, and schedule before enabling timers. The reviewed publishing service can send mail only after the automatic-delivery policy has been explicitly enabled. Keep deployed secrets and runtime data outside Git.
+
+The macOS preview helper accepts your SSH destination through `AI_DAILY_PREVIEW_SERVER` and an optional `AI_DAILY_REMOTE_ROOT` (default `/opt/ai-daily`). It copies an existing preview and opens it locally.
+
+```bash
+AI_DAILY_PREVIEW_SERVER='ai-daily@your-server.example.com' \
+  zsh deploy/mac/ai-daily-preview YYYY-MM-DD
+```
+
+## Development
+
+Run from the repository root:
+
+```bash
+python3 -m unittest discover -s tests
+
+cd feedback_web
+npm ci
+npm run typecheck
+```
+
+The Python suite uses temporary runtime fixtures and mocked providers; it includes a local HTTP server for feed transport tests. Do not use production recipients or real provider calls in regression tests. See [Contributing](CONTRIBUTING.md) for scope and submission guidance.
+
+## Repository layout
+
+```text
+config/            policies, provider definitions, and example settings
+deploy/            systemd templates and macOS preview helper
+docs/              documentation index, architecture, and historical notes
+feedback_service/  Python/SQLite feedback implementation
+feedback_web/      Next.js/Supabase feedback implementation
+prompts/           editorial and research prompts
+scripts/           selection, generation, review, packaging, and delivery
+templates/         source manifests and email layouts
+tests/             regression tests and fixtures
+```
+
+Credentials, real recipient registries, databases, runtime reports, images, mail packages, and logs are excluded from source control. See [Security](SECURITY.md) for reporting a vulnerability.
+
+## License
+
+Project code and original documentation are available under the [MIT License](LICENSE). Third-party dependencies and quoted source material retain their respective licenses and rights.

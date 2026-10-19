@@ -4,10 +4,10 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/ths/ai-daily
-EnvironmentFile=/home/ths/ai-daily/ai_daily_workflow/.env
+WorkingDirectory=/opt/ai-daily
+EnvironmentFile=/opt/ai-daily/ai_daily_workflow/.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/home/ths/ai-daily/.venv/bin/python /home/ths/ai-daily/ai_daily_workflow/scripts/update_text_models.py --scheduled
+ExecStart=/opt/ai-daily/.venv/bin/python /opt/ai-daily/ai_daily_workflow/scripts/update_text_models.py --scheduled
 TimeoutStartSec=30min
 Restart=no
 UMask=0077

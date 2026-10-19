@@ -32,6 +32,10 @@ daily_runs/
 assets/
 output/
 email_packages/
+runtime_state/
+feedback-data/
+deploy_backups/
+deploy_staging/
 
 # Local API image candidates and temporary exports
 *.eml

@@ -5,13 +5,13 @@ Wants=network-online.target time-sync.target
 
 [Service]
 Type=oneshot
-User=ths
-Group=ths
-WorkingDirectory=/home/ths/ai-daily
-EnvironmentFile=/home/ths/ai-daily/ai_daily_workflow/.env
+User=ai-daily
+Group=ai-daily
+WorkingDirectory=/opt/ai-daily
+EnvironmentFile=/opt/ai-daily/ai_daily_workflow/.env
 Environment=PYTHONUNBUFFERED=1
 # A failed quality review is a stop condition: it must never fall back to a
 # weaker model and then send a partly checked email.
 Environment=AI_DAILY_AUTO_QA_MODEL=gpt-5.6-sol
-ExecStart=/home/ths/ai-daily/.venv/bin/python /home/ths/ai-daily/ai_daily_workflow/scripts/auto_publish.py --workspace /home/ths/ai-daily
+ExecStart=/opt/ai-daily/.venv/bin/python /opt/ai-daily/ai_daily_workflow/scripts/auto_publish.py --workspace /opt/ai-daily
 UMask=0077
