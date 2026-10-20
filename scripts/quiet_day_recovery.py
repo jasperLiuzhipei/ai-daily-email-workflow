@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 from event_editorial import canonical_url, digest, eligibility
 from fetch_selected_source_material import source_material, safe_public_http_url
-from source_verification import relevant
+from source_verification import material_readability
 from editorial_runtime_support import atomic_json
 from quiet_day_selection import checked_quiet_policy
 from editorial_value import CONTRACT
@@ -83,12 +83,14 @@ def recover_pending(events, assessed, materials, *, policy, evaluator, output_di
                         timeout_seconds=max(1, int(min(12, left()))), max_bytes=1500000)
                     body = m.get('source_text', '')
                     final_url = m.get('resolved_url') or url
-                    ok = (m.get('fetch_status') == 'fetched' and safe_public_http_url(final_url)
-                          and relevant(original, m.get('page_title', ''), body))
-                    attempt.update(fetch_status=m.get('fetch_status'), read=ok, error=m.get('fetch_error'))
+                    ok, reason = material_readability(original, m)
+                    attempt.update(fetch_status=m.get('fetch_status'), read=ok, error=m.get('fetch_error'),
+                                   readability_reason=reason, resolved_url=final_url, readable_chars=len(body))
                     if ok:
                         materials[sid] = {**materials[sid], 'url': final_url, 'text': body,
                             'read_status': 'read', 'text_sha256': digest(body), 'origin': 'quiet_day_recovery',
+                            'fetch_status': m.get('fetch_status'), 'fetch_error': '',
+                            'readability_reason': reason, 'document_identity': m.get('document_identity', {}),
                             'recovered_from_url': original.get('primary_url')}
                         atomic_json(Path(output_dir) / 'recovered_materials' / (sid + '.json'), materials[sid])
                         audit['sources_recovered'] += 1

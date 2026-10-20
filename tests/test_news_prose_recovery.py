@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from ai_gateway_client import ProviderRuntime
+from ai_gateway_client import ProviderRuntime, GatewayError
 from generate_daily_content_api import (
     ContentApiError, batch_system_prompt, editorial_text,
     generate_individual_news_cards, generate_shell_with_fallback, generated_news_copy,
@@ -40,6 +40,40 @@ def card(**changes):
 
 
 class NewsProseRecoveryTests(unittest.TestCase):
+    def test_rejected_card_preserves_request_usage_and_json_repair_metadata(self):
+        bad = card(one_liner="厂商向企业客户开放检索工具预览，" * 25)
+        failed = {"request_id": "rejected-1", "usage": {"total_tokens": 123},
+                  "json_repair": {"attempted": True, "request_id": "json-repair-1", "usage": {"total_tokens": 45}}}
+        success = {"request_id": "accepted-2", "usage": {"total_tokens": 88}}
+        with patch("generate_daily_content_api.chat_json", side_effect=[(bad, failed), (card(), success)]):
+            cards, metadata = generate_individual_news_cards(runtime(), materials_news=[source()], labels=["行业视角"])
+        self.assertEqual(len(cards), 1)
+        trace = metadata["cards"][0]
+        self.assertEqual(trace["failed_attempts"][0]["response"], failed)
+        self.assertEqual(trace["failed_attempts"][0]["failure_stage"], "content_validation")
+        self.assertEqual(trace["response"], success)
+
+    def test_gateway_failure_never_reuses_previous_card_response(self):
+        bad = card(one_liner="厂商向企业客户开放检索工具预览，" * 25)
+        failed = {"request_id": "rejected-1", "usage": {"total_tokens": 123}}
+        with patch("generate_daily_content_api.chat_json", side_effect=[(bad, failed), GatewayError("unavailable")]):
+            cards, metadata = generate_individual_news_cards(runtime(), materials_news=[source()], labels=["行业视角"])
+        self.assertEqual(cards, [])
+        attempts = metadata["dropped_cards"][0]["attempts"]
+        self.assertEqual(attempts[0]["response"], failed)
+        self.assertIsNone(attempts[1]["response"])
+        self.assertEqual(attempts[1]["failure_stage"], "gateway")
+
+    def test_shell_preserves_rejected_response_without_reusing_it_on_transport_failure(self):
+        bad = {"editor_note": "今日编辑简评" * 70, "summary_headline": "企业检索入口整合",
+               "summary": "工具入口整合减少系统切换。"}
+        failed = {"request_id": "shell-rejected", "usage": {"total_tokens": 99}}
+        with patch("generate_daily_content_api.chat_json", side_effect=[(bad, failed), OSError("unavailable")]):
+            _, metadata = generate_shell_with_fallback((runtime(),), paper=None, news=[card()], default_section={})
+        self.assertEqual(metadata["attempts"][0]["response"], failed)
+        self.assertEqual(metadata["attempts"][0]["failure_stage"], "content_validation")
+        self.assertIsNone(metadata["attempts"][1]["response"])
+
     def generate(self, selected, outputs):
         with patch("generate_daily_content_api.chat_json", side_effect=[(c, {}) for c in outputs]) as chat:
             cards, metadata = generate_individual_news_cards(runtime(), materials_news=[selected], labels=["行业视角"])

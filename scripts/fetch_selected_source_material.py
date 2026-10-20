@@ -15,7 +15,7 @@ import ipaddress
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from source_document import readable
+from source_document import read_document
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -168,6 +168,7 @@ def source_material(candidate: dict[str, Any], *, max_chars: int, timeout_second
             record.update(fetch_status="fetched", source_text=compact_text(candidate["source_text"], max_chars),
                           resolved_url=verification.get("evidence_url", primary_url), http_status=200,
                           page_title=verification.get("page_title", ""), primary_verification=verification)
+            record['document_identity'] = verification.get('document_identity', {})
             if verification.get("date_conflict"):
                 record["boundary"] = (record["boundary"] + " 官方页面与API日期字段不一致，不能将采集日期直接当作发布日期。 ").strip()
             return record
@@ -176,7 +177,9 @@ def source_material(candidate: dict[str, Any], *, max_chars: int, timeout_second
         return record
     try:
         raw, final_url, http_status = fetch_html(primary_url, timeout_seconds=timeout_seconds, max_bytes=max_bytes)
-        page_title, body, published_dates = readable(raw)
+        if http_status != 200 or not safe_public_http_url(final_url):
+            raise SourceMaterialError("unsafe redirect or unsuccessful HTTP status")
+        page_title, body, published_dates, identity = read_document(raw)
         combined = compact_text(body, max_chars)
         if not combined:
             raise SourceMaterialError("empty readable text")
@@ -187,6 +190,7 @@ def source_material(candidate: dict[str, Any], *, max_chars: int, timeout_second
                 "http_status": http_status,
                 "page_title": compact_text(page_title, 300),
                 "source_text": combined,
+                "document_identity": identity,
             }
         )
     except SourceMaterialError as exc:

@@ -16,7 +16,7 @@ from event_editorial import (VERSION, EditorialError, checked_policy, canonical_
                             eligibility, group_sources, select_events, source_id,
                             unique_sources, validate_assessment, news_window_eligible, assessment_policy)
 from fetch_selected_source_material import source_material
-from source_verification import relevant
+from source_verification import material_readability
 from editorial_runtime_support import atomic_json, read_material_cache, RuntimeBudget
 from editorial_value import CONTRACT
 
@@ -69,7 +69,7 @@ def prepare_material(c, *, folder, policy, offline=False, shared_cache=None, tim
                            'excerpt': c.get('source_excerpt') or c.get('description'),
                            'title': c.get('title'), 'date': str(c.get('published_at') or ''),
                            'verification': {k:(c.get('primary_verification') or {}).get(k) for k in ('status','response_sha256','date_conflict')},
-                           'source_chars': policy['source_chars'], 'extractor_version': 3, 'offline': offline})
+                           'source_chars': policy['source_chars'], 'extractor_version': 4, 'offline': offline})
     shared_path = Path(shared_cache) / (source_input + '.json') if shared_cache and not offline else None
     for cache_path in [cached, shared_path]:
         if cache_path is None:
@@ -86,7 +86,8 @@ def prepare_material(c, *, folder, policy, offline=False, shared_cache=None, tim
     if verification.get('status') == 'verified' and len(text) >= 300:
         material = {'source_text': text[:policy['source_chars']], 'fetch_status': 'fetched',
                     'page_title': verification.get('page_title', c.get('title')),
-                    'resolved_url': c.get('primary_url'), 'origin': 'embedded_verified_snapshot'}
+                    'resolved_url': c.get('primary_url'), 'origin': 'embedded_verified_snapshot',
+                    'document_identity': verification.get('document_identity', {})}
     elif offline:
         material = {'source_text': text or c.get('source_excerpt') or c.get('description') or '',
                     'fetch_status': 'fallback_only', 'origin': 'archive_discovery_excerpt'}
@@ -99,13 +100,14 @@ def prepare_material(c, *, folder, policy, offline=False, shared_cache=None, tim
         fetch_candidate.pop('editorial_assessment', None)
         material = source_material(fetch_candidate, max_chars=policy['source_chars'], timeout_seconds=timeout_seconds, max_bytes=1500000)
     body = str(material.get('source_text') or '')
-    read = material.get('fetch_status') == 'fetched' and relevant(c, material.get('page_title') or '', body)
+    read, reason = material_readability(c, material)
     result = {'source_id': key, 'url': material.get('resolved_url') or material.get('primary_url') or c.get('primary_url') or c.get('source_url'),
               'title': c.get('title', ''), 'published_at': str(c.get('published_at') or ''),
               'read_status': 'read' if read else 'discovery_only',
               'text': body[:policy['source_chars']], 'input_sha256': source_input,
               'fetch_status': material.get('fetch_status'), 'origin': material.get('origin', 'http_fetch'),
               'fetch_error': material.get('fetch_error', ''),
+              'readability_reason': reason, 'document_identity': material.get('document_identity', {}),
               'date_conflict': bool(verification.get('date_conflict'))}
     result['cached_at_epoch'] = time.time()
     result['text_sha256'] = digest(result['text'])

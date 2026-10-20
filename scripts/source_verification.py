@@ -14,7 +14,8 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urldefrag
 from bs4 import BeautifulSoup
 from fetch_selected_source_material import fetch_html, safe_public_http_url
 from model_update_priority import subject_prior
-from source_document import readable
+from source_document import read_document, readable
+from event_editorial import canonical_url
 
 
 def host(url):
@@ -45,9 +46,17 @@ def high_value_reasons(candidate, policy, model_policy):
 
 
 
+def unreadable_reason(page_title, text):
+    if len(text) < 300:
+        return 'short_body'
+    if re.search(r'captcha|access denied|verify you are human|just a moment', (page_title + ' ' + text[:250]).lower()):
+        return 'blocked_page'
+    return ''
+
+
 def relevant(candidate, page_title, text):
     # A shell, error page or unrelated redirected article is not primary proof.
-    if len(text) < 300 or re.search(r'captcha|access denied|verify you are human|just a moment', (page_title + ' ' + text[:250]).lower()):
+    if unreadable_reason(page_title, text):
         return False
     tokens = re.findall(r'[a-z][a-z0-9.-]{3,}', candidate.get('title', '').lower())
     tokens = set(t for t in tokens if t not in {'with', 'from', 'using', 'into', 'that', 'this', 'the', 'release', 'introducing', 'model', 'models', 'available', 'update'})
@@ -55,6 +64,37 @@ def relevant(candidate, page_title, text):
         return sum(t in (page_title + ' ' + text).lower() for t in tokens) >= min(2, len(tokens))
     chars = set(re.findall(r'[\u4e00-\u9fff]', candidate.get('title', '')))
     return len(chars & set(text)) >= min(5, len(chars)) and bool(chars)
+
+
+def material_readability(candidate, material):
+    """Reading identity, not factual verification or publication eligibility.
+
+    A translated headline need not share words with its source. In that case
+    require the original URL, final URL, page declarations and article body to
+    agree. Alternate links still need topic overlap; a matching host is never
+    sufficient. Metadata comes from the fetched response, not feed summaries.
+    """
+    if material.get('fetch_status') != 'fetched':
+        return False, 'fetch_unavailable'
+    title, text = material.get('page_title') or '', material.get('source_text') or ''
+    reason = unreadable_reason(title, text)
+    if reason:
+        return False, reason
+    final_url = material.get('resolved_url') or material.get('primary_url') or candidate.get('primary_url') or ''
+    if not safe_public_http_url(final_url) or material.get('http_status', 200) != 200:
+        return False, 'unsafe_or_unsuccessful_response'
+    if relevant(candidate, title, text):
+        return True, 'title_overlap'
+    identity = material.get('document_identity') or {}
+    requested = canonical_url(candidate.get('primary_url') or candidate.get('source_url') or '')
+    declared = [canonical_url(urljoin(final_url, url)) for url in identity.get('declared_urls', [])]
+    if (requested and urlsplit(requested).path not in {'', '/'}
+            and canonical_url(final_url) == requested and declared
+            and all(url == requested for url in declared)
+            and identity.get('og_type') == 'article'
+            and identity.get('body_kind') in {'explicit_article', 'article', 'social_post'}):
+        return True, 'matching_article_identity'
+    return False, 'unmatched_document'
 
 
 def verify_candidate(candidate, *, policy, output_dir, fetcher=fetch_html):
@@ -91,16 +131,20 @@ def verify_candidate(candidate, *, policy, output_dir, fetcher=fetch_html):
                 raw = data.get('content', '')
                 if data.get('extra', {}).get('date'):
                     record['api_published_at'] = data['extra']['date']
-            title, body, dates = readable(raw)
+            title, body, dates, identity = read_document(raw)
             attempt['readable_chars'] = len(body)
-            if host(final_url) in allowed and relevant(c, title, body):
+            read, reason = material_readability(c, {'fetch_status': 'fetched', 'source_text': body,
+                'page_title': title, 'resolved_url': final_url, 'http_status': status, 'document_identity': identity})
+            attempt['readability_reason'] = reason
+            if host(final_url) in allowed and read:
                 digest = hashlib.sha256(raw.encode()).hexdigest()
                 path = Path(output_dir) / (digest + '.html')
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(raw)
                 record.update({'status': 'verified', 'evidence_url': final_url,
                                'page_title': title, 'response_sha256': digest,
-                               'response_path': str(path), 'html_published_at': dates})
+                               'response_path': str(path), 'html_published_at': dates,
+                               'document_identity': identity, 'readability_reason': reason})
                 if record.get('api_published_at') and dates and record['api_published_at'] not in dates:
                     record['date_conflict'] = True
                 c['discovery_excerpt'] = c.get('description') or c.get('source_excerpt', '')

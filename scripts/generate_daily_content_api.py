@@ -887,6 +887,7 @@ def generate_individual_news_cards(
                 prompt += ("\n上次输出没有通过文案校验。请只修复以下问题，仍仅依据上述原文："
                            + repair_feedback + "。返回完整JSON；专有名词保留，其余使用自然中文。")
             repair_feedback = ""
+            response = None
             try:
                 # The configured primary route is safe to fan out.  Once it
                 # fails, queue backup requests so a temporary 502 does not
@@ -945,7 +946,9 @@ def generate_individual_news_cards(
                 if isinstance(exc, ContentApiError) and not repair_used:
                     repair_feedback = str(exc)
                 attempts.append({"provider": provider_snapshot(card_runtime), "reason": str(exc),
-                                 "repair": repair})
+                                 "repair": repair,
+                                 "failure_stage": "content_validation" if response is not None else "gateway",
+                                 "response": response})
         return index, None, {
             "mode": "dropped",
             "source_index": index,
@@ -1003,6 +1006,7 @@ def generate_shell_with_fallback(
             prompt += ("\n上次编辑简评未通过正文校验：" + repair_feedback
                        + "。围绕主判断重新取舍，不增加材料外信息，不截断句子；返回完整编辑简评JSON。")
         repair_feedback = ""
+        metadata = None
         try:
             shell, metadata = chat_json(
                 shell_runtime,
@@ -1025,7 +1029,9 @@ def generate_shell_with_fallback(
         except (GatewayError, ContentApiError, OSError) as exc:
             if isinstance(exc, ContentApiError) and not repair_used:
                 repair_feedback = str(exc)
-            attempts.append({"provider": provider_snapshot(shell_runtime), "reason": str(exc), "repair": repair})
+            attempts.append({"provider": provider_snapshot(shell_runtime), "reason": str(exc), "repair": repair,
+                             "failure_stage": "content_validation" if metadata is not None else "gateway",
+                             "response": metadata})
     return deterministic_shell(paper, news, default_section), {"mode": "deterministic_fallback", "attempts": attempts}
 
 

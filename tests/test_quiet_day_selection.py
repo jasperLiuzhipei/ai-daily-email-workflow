@@ -84,7 +84,8 @@ class QuietDayTests(unittest.TestCase):
      'coverage_source_urls':['https://example.com/blocked','https://example.org/alternate']}
   event={'event_id':'e1','sources':[c],'merge_reason':''}
   pending={'assessment_status':'pending','score':None}
-  materials={'s1':{'source_id':'s1','url':c['primary_url'],'read_status':'discovery_only','text':'short'}}
+  materials={'s1':{'source_id':'s1','url':c['primary_url'],'read_status':'discovery_only','text':'short',
+    'fetch_status':'fallback_after_fetch_error','fetch_error':'HTTP 403'}}
   calls=[]
   def fetch(c,**kw):
    calls.append(c['primary_url'])
@@ -99,6 +100,10 @@ class QuietDayTests(unittest.TestCase):
   self.assertEqual(audit['sources_recovered'],1)
   self.assertEqual(audit['attempts'][0]['error'],'HTTP 403')
   self.assertEqual(result[0][0]['score'],69)
+  self.assertEqual(materials['s1']['fetch_status'],'fetched')
+  self.assertEqual(materials['s1']['fetch_error'],'')
+  self.assertEqual(materials['s1']['readability_reason'],'title_overlap')
+  self.assertEqual(audit['attempts'][0]['readability_reason'],'fetch_unavailable')
 
  def test_exhausted_recovery_does_not_fake_success(self):
   class E:identity=['test']
