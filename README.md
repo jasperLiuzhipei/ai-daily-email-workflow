@@ -126,6 +126,12 @@ python3 scripts/run_ai_daily.py replay
 
 Diagnostics distinguish missing material, selection-to-publication differences, and editorial deferrals. Replay data supports policy evaluation without automatically changing selection rules.
 
+Single-source arXiv abstract assessments share the unchanged rubric in batches of up to four. The reader keeps the complete abstract and removes only a recognized metadata/navigation tail. Each paper retains its own score, exact source/quote validation, exceptional-score review and individual fallback. Batch traces live under `event_editorial/paper_batches/`; count usage once per request ID, even when several event records reference it. Set `paper_batch_size` to `1` in the editorial policy to use individual requests.
+
+An offline replay of 119 papers estimated a **66.1% reduction in input message tokens** (119 initial requests → 30 batches, using `o200k_base`). Recorded evidence and decisions survived replay; this is not a fresh model-quality evaluation or measured billing savings. Output tokens, retries and provider cache pricing are not included. Feed errors report the URL, HTTP status, attempt and elapsed time, with credential-bearing URL fields redacted.
+
+A four-paper check with the original model reported **25,961 → 10,764 total tokens (58.5% less)** and **20,352 → 6,358 input tokens (68.8% less)** against the earlier first attempts. All source/quote checks passed, including a previously invalid source-ID case. Scores and deferral reasons varied; this small sample does not establish unchanged judgments or guaranteed savings for every issue.
+
 On the 2026-10-19 validation issue, compacting duplicate review metadata preserved the evidence text and reduced measured input tokens from **91,584 to 65,702 (28.26%)**. A single follow-up with the original reviewer passed all six checks. This is a measured result for one issue, not an estimate of universal savings or a benchmark of long-term review quality. See the [trace optimization note (Chinese)](docs/TRACE_OPTIMIZATION_2026-10-19.md).
 
 ## Optional feedback services

@@ -13,6 +13,8 @@ import zlib
 from email.utils import parsedate_to_datetime
 import re
 import subprocess
+import time
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 import source_selection_context as context
 from source_candidates import (
     direct_candidate_from_row,
@@ -69,6 +71,14 @@ def parse_aihot_daily_entries(html_text: str) -> list[dict[str, Any]]:
     return entries
 
 
+def diagnostic_url(url: str) -> str:
+    """Keep public feed selectors useful without logging URL credentials."""
+    parsed = urlsplit(url)
+    public_keys = {'category', 'minScore', 'search_query', 'sortBy', 'sortOrder', 'max_results'}
+    query = urlencode([(k, v if k in public_keys else '[redacted]') for k, v in parse_qsl(parsed.query, keep_blank_values=True)])
+    return urlunsplit((parsed.scheme, parsed.netloc.rsplit('@', 1)[-1], parsed.path, query, ''))
+
+
 def run_curl(
     url: str,
     output: Path,
@@ -81,6 +91,7 @@ def run_curl(
         "curl",
         "-L",
         "--fail",
+        "--silent", "--show-error", "--write-out", "%{http_code}",
         "--compressed",
         "--http1.1",
         "--connect-timeout",
@@ -95,7 +106,13 @@ def run_curl(
     ]
     errors: list[str] = []
     for attempt in range(1, max(1, attempts) + 1):
+        started = time.monotonic()
         result = subprocess.run(cmd, text=True, capture_output=True)
+        code = str(getattr(result, 'stdout', '') or '').strip()
+        status = code if re.fullmatch(r'\d{3}', code) else 'unknown'
+        context = (f'url={diagnostic_url(url)} attempt={attempt}/{max(1, attempts)} '
+                   f'http_status={status} exit_code={result.returncode} '
+                   f'elapsed_seconds={time.monotonic() - started:.2f} timeout_seconds={max_time_seconds}')
         if result.returncode == 0:
             try:
                 data = output.read_bytes()
@@ -109,10 +126,10 @@ def run_curl(
                     output.write_bytes(data)
                 return data.decode("utf-8-sig", errors="replace")
             except (OSError, EOFError, zlib.error, SourceSelectionError) as exc:
-                errors.append(f"attempt {attempt}: source response decode failed ({type(exc).__name__}): {exc}")
+                errors.append(f"{context}: source response decode failed ({type(exc).__name__}): {exc}")
                 continue
-        detail = result.stderr.strip() or f"curl failed for {url}"
-        errors.append(f"attempt {attempt}: {detail}")
+        detail = re.sub(r'https?://[^\s<>]+', lambda m: diagnostic_url(m.group()), result.stderr.strip())
+        errors.append(f"{context}: {detail[:500] or 'curl failed'}")
     raise SourceSelectionError("\n".join(errors))
 
 

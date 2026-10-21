@@ -20,6 +20,7 @@ DEFAULT_POLICY = {
     'workers': 4, 'max_candidates': 300, 'source_chars': 12000,
     'runtime_budget_seconds': 1800, 'max_api_requests': 650,
     'material_cache_ttl_seconds': 21600, 'shared_material_cache': 'daily_runs/.cache/event_materials',
+    'paper_batch_size': 4,
     'audience': '产品、研发、用户运营与内部AI提效；兼顾会改变这些读者判断的重要产业与科研进展。',
 }
 
@@ -127,6 +128,8 @@ def checked_policy(raw):
     for key in ('workers', 'max_candidates', 'source_chars', 'runtime_budget_seconds', 'max_api_requests', 'material_cache_ttl_seconds'):
         if type(policy[key]) is not int or policy[key] <= 0:
             raise EditorialError('Positive integer required: ' + key)
+    if type(policy['paper_batch_size']) is not int or not 1 <= policy['paper_batch_size'] <= 4:
+        raise EditorialError('paper_batch_size must be an integer from 1 to 4')
     if 'quiet_day' in policy:
         from quiet_day_selection import checked_quiet_policy
         policy['quiet_day'] = checked_quiet_policy(policy['quiet_day'])
@@ -231,7 +234,9 @@ def validate_assessment(raw, packet, policy):
         # The prompt requests short excerpts, but an authentic longer sentence
         # is not missing evidence. Keep a bounded tolerance for English quotes;
         # exact source matching below remains mandatory and text is never cut.
-        if sid not in sources or not isinstance(quote, str) or not 8 <= len(quote.strip()) <= 1600:
+        if sid not in sources:
+            raise EditorialError(f'Invalid evidence reference: evidence[{index}].source_id={sid!r}; allowed source_ids={list(sources)}')
+        if not isinstance(quote, str) or not 8 <= len(quote.strip()) <= 1600:
             raise EditorialError('Invalid evidence reference')
         if normalized_text(quote) not in normalized_text(sources[sid]['text']):
             raise EditorialError('Evidence quote absent from supplied source text')

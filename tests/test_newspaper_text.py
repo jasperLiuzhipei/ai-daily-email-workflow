@@ -40,6 +40,8 @@ class NewspaperTests(unittest.TestCase):
         self.assertNotIn('image',data['paper']);validate_content(data)
         html=n.render_email(data)
         self.assertNotIn('<img',html)
+        self.assertIn('本期其余新闻与简讯',html)
+        self.assertNotIn('应用、安全与研究进展',html)
         self.assertNotIn('PlannerForge：连接场景测试模块',html)  # prior issue's reviewed TOC is not reused
         import hashlib
         data['presentation']['html_sha256']=hashlib.sha256(html.encode()).hexdigest()

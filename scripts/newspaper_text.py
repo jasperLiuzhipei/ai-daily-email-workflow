@@ -116,7 +116,7 @@ def render_email(data, *, editorial_override=None):
     else: s.select_one('#np-research').decompose()
     if supplement_i is not None:toc.append(('np-supplement','重要补充','1 条',news[supplement_i]['title']))
     else:s.select_one('#np-supplement').decompose()
-    if quick:toc.append(('np-quick','更多动态',f'{len(quick)} 条','应用、安全与研究进展'))
+    if quick:toc.append(('np-quick','更多动态',f'{len(quick)} 条','本期其余新闻与简讯'))
     else:s.select_one('#np-quick').decompose()
     put('.np-toc ol',''.join(f'<li><a href="#{id}"><strong>{label} <span class="np-count">{count} ↘</span></strong><span class="np-toc-summary">{e(title)}</span></a></li>' for id,label,count,title in toc))
     if override:

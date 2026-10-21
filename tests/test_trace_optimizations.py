@@ -16,6 +16,8 @@ from source_identity import SourceSelectionError
 from quality_review import compact_source_packet, compact_review_source_packet
 from event_editorial_runtime import assessment_counts, evaluate_candidates
 from event_editorial import checked_policy
+from unittest.mock import patch
+from types import SimpleNamespace
 
 XML = b'<?xml version="1.0"?><rss><channel><item><title>Real feed</title></item></channel></rss>'
 
@@ -64,8 +66,24 @@ class SourceTransportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder)/'source.xml'; path.write_bytes(XML)
             before = self.requests.count('/error')
-            with self.assertRaises(SourceSelectionError): self.fetch('/error', path, attempts=2)
+            with self.assertRaises(SourceSelectionError) as error: self.fetch('/error', path, attempts=2)
             self.assertEqual(self.requests.count('/error') - before, 2)
+            message = str(error.exception)
+            self.assertIn('/error attempt=1/2 http_status=503 exit_code=22', message)
+            self.assertIn('attempt=2/2', message)
+            self.assertIn('elapsed_seconds=', message)
+            self.assertNotIn('% Total', message)
+
+    def test_error_url_redacts_credentials_but_keeps_public_feed_filters(self):
+        url = 'https://test-user:test-secret@example.test/feed?category=ai&token=test-private-token'
+        result = SimpleNamespace(returncode=22, stdout='500', stderr='curl: error at '+url)
+        with tempfile.TemporaryDirectory() as folder, patch('source_feed_adapters.subprocess.run', return_value=result):
+            with self.assertRaises(SourceSelectionError) as error:
+                run_curl(url, Path(folder)/'feed.xml', attempts=1)
+        self.assertIn('example.test/feed?category=ai', str(error.exception))
+        self.assertIn('http_status=500', str(error.exception))
+        self.assertNotIn('test-secret', str(error.exception))
+        self.assertNotIn('test-private-token', str(error.exception))
 
     def test_broken_gzip_is_a_fetch_error_not_replacement_text(self):
         with tempfile.TemporaryDirectory() as folder:
