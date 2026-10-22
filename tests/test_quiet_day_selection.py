@@ -89,21 +89,20 @@ class QuietDayTests(unittest.TestCase):
   calls=[]
   def fetch(c,**kw):
    calls.append(c['primary_url'])
-   if len(calls)==1:return {'fetch_status':'fallback_after_fetch_error','fetch_error':'HTTP 403','source_text':''}
    return {'fetch_status':'fetched','source_text':TEXT*8,'page_title':'Runtime migration','resolved_url':c['primary_url']}
   def assessor(e,m,*args):return ({'assessment_status':'complete','score':69}, {'sources':list(m.values())})
   class E:identity=['test']
   with tempfile.TemporaryDirectory() as d,patch('quiet_day_recovery.source_material',side_effect=fetch):
    result,audit=recover_pending([event],[(pending,{})],materials,policy=POLICY,evaluator=E(),
       output_dir=Path(d),prompt='',remaining=lambda:100,assessor=assessor)
-  self.assertEqual(calls,[c['primary_url'],'https://example.org/alternate'])
+  self.assertEqual(calls,['https://example.org/alternate'])
   self.assertEqual(audit['sources_recovered'],1)
-  self.assertEqual(audit['attempts'][0]['error'],'HTTP 403')
+  self.assertEqual(audit['skipped_sources'][0]['reason'],'same_run_http_403')
   self.assertEqual(result[0][0]['score'],69)
   self.assertEqual(materials['s1']['fetch_status'],'fetched')
   self.assertEqual(materials['s1']['fetch_error'],'')
   self.assertEqual(materials['s1']['readability_reason'],'title_overlap')
-  self.assertEqual(audit['attempts'][0]['readability_reason'],'fetch_unavailable')
+  self.assertEqual(audit['attempts'][0]['readability_reason'],'title_overlap')
 
  def test_exhausted_recovery_does_not_fake_success(self):
   class E:identity=['test']

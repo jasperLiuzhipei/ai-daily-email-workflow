@@ -16,6 +16,7 @@ import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from source_document import read_document
+from source_urls import clean_source_url
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -46,9 +47,9 @@ def compact_text(value: str, limit: int) -> str:
 
 
 def normalize_source_url(value: str) -> str:
-    """Return a feed URL with HTML entities decoded exactly once."""
+    """Decode feed entities once and remove explicit prose delimiters."""
 
-    return html.unescape(str(value or "")).strip()
+    return clean_source_url(value)
 
 
 def safe_public_http_url(value: str) -> bool:
@@ -113,7 +114,8 @@ def fetch_html(url: str, *, timeout_seconds: int, max_bytes: int) -> tuple[str, 
 
 
 def source_material(candidate: dict[str, Any], *, max_chars: int, timeout_seconds: int, max_bytes: int) -> dict[str, Any]:
-    requested_url = normalize_source_url(candidate.get("primary_url") or candidate.get("source_url") or "")
+    original_url = str(candidate.get("primary_url") or candidate.get("source_url") or "")
+    requested_url = normalize_source_url(original_url)
     source_type = str(candidate.get("source_type") or "")
     primary_url = editorial_primary_url(requested_url, source_type)
     fallback = compact_text(str(candidate.get("source_excerpt") or ""), max_chars)
@@ -135,6 +137,8 @@ def source_material(candidate: dict[str, Any], *, max_chars: int, timeout_second
         "fetch_status": "fallback_only",
         "source_text": fallback,
     }
+    if requested_url != original_url:
+        record['url_normalization'] = {'original_url': original_url, 'normalized_url': requested_url}
     verification = candidate.get("primary_verification", {})
     # Keep scoring and writing on the same bounded evidence snapshot. A later
     # fetch must not silently replace the material that justified selection.

@@ -1,7 +1,9 @@
 """Shared article extraction for verification and editorial material acquisition."""
 import hashlib
 import re
-from urllib.parse import urlsplit
+from urllib.parse import urljoin
+
+from source_urls import x_status_identity
 
 from bs4 import BeautifulSoup
 
@@ -18,12 +20,11 @@ def read_document(raw):
         element.decompose()
     body, kind = None, 'page'
     # Match the post's own permalink, not a quoted post or a longer reply.
-    social = next((urlsplit(url) for url in urls if
-                   (urlsplit(url).hostname or '').lower() in {'x.com', 'twitter.com', 'www.x.com', 'www.twitter.com'}
-                   and re.fullmatch(r'/[^/]+/status/\d+', urlsplit(url).path)), None)
+    social = next((url for url in urls if x_status_identity(url)), None)
     if social:
         for article in soup.select('article'):
-            if any(urlsplit(a['href']).path == social.path and a.find_parent('article') is article
+            if any(x_status_identity(urljoin(social, a['href'])) == x_status_identity(social)
+                   and a.find_parent('article') is article
                    for a in article.select('a[href]')):
                 body, kind = article, 'social_post'
                 break

@@ -16,6 +16,7 @@ from fetch_selected_source_material import fetch_html, safe_public_http_url
 from model_update_priority import subject_prior
 from source_document import read_document, readable
 from event_editorial import canonical_url
+from source_urls import clean_source_url, matching_special_document, conflicting_document_identity
 
 
 def host(url):
@@ -83,11 +84,17 @@ def material_readability(candidate, material):
     final_url = material.get('resolved_url') or material.get('primary_url') or candidate.get('primary_url') or ''
     if not safe_public_http_url(final_url) or material.get('http_status', 200) != 200:
         return False, 'unsafe_or_unsuccessful_response'
+    identity = material.get('document_identity') or {}
+    requested = canonical_url(clean_source_url(candidate.get('primary_url') or candidate.get('source_url') or ''))
+    declared = [canonical_url(urljoin(final_url, url)) for url in identity.get('declared_urls', [])]
+    transport_requested = clean_source_url(material.get('primary_url') or requested)
+    if conflicting_document_identity(transport_requested, final_url, declared):
+        return False, 'conflicting_document_identity'
     if relevant(candidate, title, text):
         return True, 'title_overlap'
-    identity = material.get('document_identity') or {}
-    requested = canonical_url(candidate.get('primary_url') or candidate.get('source_url') or '')
-    declared = [canonical_url(urljoin(final_url, url)) for url in identity.get('declared_urls', [])]
+    special = matching_special_document(requested, final_url, declared, identity, text)
+    if special:
+        return True, special
     if (requested and urlsplit(requested).path not in {'', '/'}
             and canonical_url(final_url) == requested and declared
             and all(url == requested for url in declared)
@@ -99,7 +106,7 @@ def material_readability(candidate, material):
 
 def verify_candidate(candidate, *, policy, output_dir, fetcher=fetch_html):
     c = dict(candidate)
-    original_url = c.get('primary_url') or c.get('source_url', '')
+    original_url = clean_source_url(c.get('primary_url') or c.get('source_url', ''))
     allowed = set(policy.get('official_hosts', []))
     record = {'status': 'pending', 'requested_url': original_url, 'attempts': [],
               'checked_at': datetime.now(timezone.utc).isoformat()}
@@ -109,7 +116,7 @@ def verify_candidate(candidate, *, policy, output_dir, fetcher=fetch_html):
     queue.extend(re.findall(r'https?://[^\s<>"\)]+', str(c.get('description', ''))))
     visited = set()
     while queue and len(visited) < 3:
-        url = urldefrag(queue.pop(0).rstrip('.,;'))[0]
+        url = urldefrag(clean_source_url(queue.pop(0)).rstrip('.,;'))[0]
         if url in visited or not safe_public_http_url(url):
             continue
         if visited and host(url) not in allowed:

@@ -33,7 +33,7 @@ class ResearchFetchFallbackTests(unittest.TestCase):
         self.assertEqual(normalize_source_url(encoded), "https://example.com/post?a=1&b=2")
 
     def test_non_ascii_candidate_url_is_skipped_without_crashing(self) -> None:
-        malformed = candidate("bad-feed-url", "https://arxiv.org/abs/2609.00549）", 90)
+        malformed = candidate("bad-feed-url", "https://example.org/不明确的路径", 90)
 
         material = source_material(
             malformed,

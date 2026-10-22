@@ -71,7 +71,7 @@ def prepare_material(c, *, folder, policy, offline=False, shared_cache=None, tim
                            'excerpt': c.get('source_excerpt') or c.get('description'),
                            'title': c.get('title'), 'date': str(c.get('published_at') or ''),
                            'verification': {k:(c.get('primary_verification') or {}).get(k) for k in ('status','response_sha256','date_conflict')},
-                           'source_chars': policy['source_chars'], 'extractor_version': 4, 'offline': offline})
+                           'source_chars': policy['source_chars'], 'extractor_version': 5, 'offline': offline})
     shared_path = Path(shared_cache) / (source_input + '.json') if shared_cache and not offline else None
     for cache_path in [cached, shared_path]:
         if cache_path is None:
@@ -109,6 +109,7 @@ def prepare_material(c, *, folder, policy, offline=False, shared_cache=None, tim
               'text': body[:policy['source_chars']], 'input_sha256': source_input,
               'fetch_status': material.get('fetch_status'), 'origin': material.get('origin', 'http_fetch'),
               'fetch_error': material.get('fetch_error', ''),
+              'url_normalization': material.get('url_normalization'),
               'readability_reason': reason, 'document_identity': material.get('document_identity', {}),
               'date_conflict': bool(verification.get('date_conflict'))}
     result['cached_at_epoch'] = time.time()

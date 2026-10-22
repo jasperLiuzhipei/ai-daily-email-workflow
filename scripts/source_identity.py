@@ -6,6 +6,7 @@ from datetime import datetime
 from dataclasses import field
 import html
 import re
+from source_urls import clean_source_url
 from source_selection_constants import (
     AIHOT_ITEM_RE,
     ARXIV_RE,
@@ -43,7 +44,7 @@ def normalize_text(value: str | None) -> str:
 def normalize_url(value: str | None) -> str:
     if not value:
         return ""
-    value = value.strip().rstrip("，。).,")
+    value = clean_source_url(value).rstrip("，。).,")
     value = re.sub(r"#.*$", "", value)
     # Remove common tracking query params while preserving meaningful query
     # strings from sites that use them for content.
