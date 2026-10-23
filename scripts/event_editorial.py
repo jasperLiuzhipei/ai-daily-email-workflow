@@ -10,6 +10,7 @@ import json
 import re
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from editorial_value import CONTRACT, value_route
+import publication_priority
 
 VERSION = 'event-editorial-v3.1'
 DIMENSIONS = ('change', 'impact', 'reader_value', 'learning_value')
@@ -138,6 +139,11 @@ def checked_policy(raw):
     if 'news_budget' in policy:
         from news_budget import checked_budget
         policy['news_budget'] = checked_budget(policy['news_budget'])
+    if policy.get('priority_contract') not in (None, publication_priority.CONTRACT):
+        raise EditorialError('Unknown publication priority contract')
+    if (publication_priority.enabled(policy.get('news_budget'))
+            and policy.get('priority_contract') != publication_priority.CONTRACT):
+        raise EditorialError('News priority ranking requires evidenced priority assessments')
     contract = policy.get('admission_contract')
     if contract is not None and contract != CONTRACT:
         raise EditorialError('Unknown editorial admission contract')
@@ -190,7 +196,8 @@ def event_family_key(item):
 def assessment_policy(policy):
     """Execution limits do not change editorial meaning or invalidate scores."""
     keys = ('version', 'weights', 'publish_threshold', 'deep_threshold',
-            'exceptional_review_threshold', 'audience', 'admission_contract', 'brief_value_floor')
+            'exceptional_review_threshold', 'audience', 'admission_contract', 'brief_value_floor',
+            'priority_contract')
     return {k: policy[k] for k in keys if k in policy}
 
 
@@ -293,6 +300,11 @@ def validate_assessment(raw, packet, policy):
         raise EditorialError('Missing illustration suitability rationale')
     if illustration['eligible'] and a['content_kind'] not in {'research', 'engineering'}:
         raise EditorialError('Ordinary product/news cannot claim research illustration eligibility')
+    if policy.get('priority_contract') == publication_priority.CONTRACT:
+        try:
+            publication_priority.validate_priority(a, evidence, readable_evidence)
+        except ValueError as exc:
+            raise EditorialError(str(exc)) from exc
     a['score'] = None if unknown else int(sum(dimensions[k]['level'] * policy['weights'][k] / 4
                                             for k in DIMENSIONS) + 0.5)
     a['policy_version'] = policy['version']
@@ -371,7 +383,7 @@ def select_events(candidates, policy, research_count=1, max_news_count=None):
     used = {c['event_id'] for c in research}
     used_keys = set(research_keys)
     news = []
-    for c in eligible:
+    for c in sorted(eligible, key=lambda c: publication_priority.news_rank(c, policy.get('news_budget'))):
         if c['event_id'] in research_duplicate_ids:
             continue
         if c['event_id'] in used:
@@ -391,7 +403,8 @@ def select_events(candidates, policy, research_count=1, max_news_count=None):
             c['editorial_decision'] = {'action': 'defer', 'reason': '本次调用显式限制新闻数量；保留在候选池。'}
             rejected.append(c)
             continue
-        c['display_tier'] = 'deep' if c['editorial_assessment']['score'] >= policy['deep_threshold'] else 'brief'
+        c['display_tier'] = 'deep' if (c['editorial_assessment']['score'] >= policy['deep_threshold']
+            or publication_priority.enabled(policy.get('news_budget')) and publication_priority.level(c) == 2) else 'brief'
         news.append(c)
         if key:
             used_keys.add(key)

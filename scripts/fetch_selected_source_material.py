@@ -195,6 +195,7 @@ def source_material(candidate: dict[str, Any], *, max_chars: int, timeout_second
                 "page_title": compact_text(page_title, 300),
                 "source_text": combined,
                 "document_identity": identity,
+                "published_dates": published_dates,
             }
         )
     except SourceMaterialError as exc:

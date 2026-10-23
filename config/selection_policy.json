@@ -13,7 +13,10 @@
     "lookback_days": 4,
     "news_min_score": 60,
     "research_min_score": 60,
-    "max_recalled_candidates": 24
+    "max_recalled_candidates": 24,
+    "reserved_budget_deferred": 8,
+    "reserved_pending_evidence": 4,
+    "reserved_product_news": 4
   },
   "selection": {
     "research_count": 1,
@@ -132,5 +135,11 @@
     "policy_version": "high-value-coverage-v2",
     "omission_policy": "advisory",
     "require_explicit_omission_reason": true
+  },
+  "aihot_api": {
+    "enabled": true,
+    "max_pages": 12,
+    "pending_search_queries": 4,
+    "budget_seconds": 180
   }
 }

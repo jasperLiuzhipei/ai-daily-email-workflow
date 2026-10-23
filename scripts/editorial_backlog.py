@@ -108,10 +108,11 @@ def effective_score(candidate: dict[str, Any]) -> float:
 
 def sync_backlog(run_root: Path, run_date: str, *, send_ledger: Path | None = None,
                  policy: dict[str, Any] | None = None) -> dict[str, Any]:
-    policy = {**DEFAULT_POLICY, **(policy or {})}
     current = date.fromisoformat(run_date)
     path = run_root / "editorial_backlog.json"
     ledger = read_object(path) or {"schema_version": 1, "items": {}}
+    # Composition/send reconciliation must not reset the selection policy.
+    policy = {**DEFAULT_POLICY, **ledger.get('policy', {}), **(policy or {})}
     items = ledger.setdefault("items", {})
     published = published_records(run_root, send_ledger or run_root / "send_ledger.json",
                                   run_date, int(policy["lookback_days"]))
@@ -185,6 +186,7 @@ def recall_candidates(
     ledger: dict[str, Any], run_date: str, *,
     start_at: datetime | None = None, end_at: datetime | None = None,
     freshness_exclusions: list[dict[str, Any]] | None = None,
+    quota_exclusions: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Recall eligible drafts, applying the publication window before the quota.
 
@@ -203,8 +205,8 @@ def recall_candidates(
         if entry["first_seen"] >= run_date:
             continue
         candidate = dict(entry["candidate"])
-        candidate.update(description=candidate.get("source_excerpt", ""),
-                         categories=candidate.get("source_categories", []),
+        candidate.update(description=candidate.get("source_excerpt") or candidate.get("description", ""),
+                         categories=candidate.get("source_categories") or candidate.get("categories", []),
                          backlog_id=entry["id"], backlog_first_seen=entry["first_seen"],
                          research_window_strategy="unpublished_backlog")
         if start_at is not None and end_at is not None and not candidate_in_window(candidate, start_at, end_at):
@@ -215,10 +217,45 @@ def recall_candidates(
                     "reason": "Original publication time is outside the maximum lookback or unavailable.",
                 })
             continue
-        eligible.append((entry["status"] == "generation_failed", entry["raw_news_score"] or 0, candidate))
-    eligible.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    limit = int(ledger.get("policy", DEFAULT_POLICY)["max_recalled_candidates"])
-    return [x[2] for x in eligible[:limit]]
+        eligible.append((entry, candidate))
+    policy = {**DEFAULT_POLICY, **ledger.get('policy', {})}
+    limit = int(policy['max_recalled_candidates'])
+    def rank(pair):
+        entry, candidate = pair
+        return (entry['status'] != 'generation_failed', -(entry.get('raw_news_score') or 0),
+                entry['first_seen'], entry['id'])
+    eligible.sort(key=rank)
+    chosen = []
+    def take(pool, count, lane):
+        for entry, candidate in pool:
+            if len(chosen) >= limit or count <= 0:
+                break
+            if any(c['backlog_id'] == entry['id'] for c in chosen):
+                continue
+            candidate['backlog_recall_lane'] = lane
+            chosen.append(candidate)
+            count -= 1
+    # Separate budget deferrals and unfinished evidence from the score-ranked
+    # pool. A score of zero often means "not read yet", not "unimportant".
+    deferred = [p for p in eligible if p[1].get('editorial_decision', {}).get('code') in
+                {'publication_volume_budget', 'catchup_budget'}]
+    reserved = int(policy.get('reserved_budget_deferred', 0))
+    take([p for p in deferred if p[1].get('editorial_assessment', {}).get('content_kind') in
+          {'model_product', 'industry'}],
+         min(reserved, int(policy.get('reserved_product_news', 0))), 'qualified_budget_deferred')
+    take(deferred, max(0, reserved - len(chosen)), 'qualified_budget_deferred')
+    pending = [p for p in eligible if p[1].get('editorial_assessment', {}).get('assessment_status') == 'pending']
+    pending.sort(key=lambda p: (not bool(p[1].get('aihot_hot_topics')),
+                                p[1].get('source_type') not in {'model_release', 'product_launch', 'tool'},
+                                p[0]['first_seen'], p[0]['id']))
+    take(pending, int(policy.get('reserved_pending_evidence', 0)), 'pending_evidence')
+    take(eligible, limit, 'score_ranked')
+    chosen_ids = {c['backlog_id'] for c in chosen}
+    if quota_exclusions is not None:
+        quota_exclusions.extend({'id': e['id'], 'title': c.get('title', ''),
+                                 'reason': 'recall_capacity', 'score': e.get('raw_news_score')}
+                                for e, c in eligible if e['id'] not in chosen_ids)
+    return chosen
 
 
 def main() -> None:

@@ -10,7 +10,7 @@
   "deep_threshold": 85,
   "exceptional_review_threshold": 95,
   "workers": 4,
-  "max_candidates": 300,
+  "max_candidates": 600,
   "source_chars": 12000,
   "audience": "产品、研发、用户运营与内部AI提效；兼顾会改变这些读者判断的重要产业与科研进展。",
   "runtime_budget_seconds": 1800,
@@ -38,6 +38,11 @@
     "normal_max": 15,
     "hard_max": 20,
     "max_catchup": 2,
-    "expansion_score": 85
-  }
+    "expansion_score": 85,
+    "catchup_competes": true,
+    "catchup_preserve_mix": true,
+    "priority_mode": "publication-priority-v1",
+    "lead_catchup_extra": 2
+  },
+  "priority_contract": "publication-priority-v1"
 }

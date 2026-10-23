@@ -9,16 +9,16 @@ from datetime import timezone
 TZ = timezone(timedelta(hours=8))
 
 
-DEFAULT_FEED_URL = "https://aihot.virxact.com/feed.xml"
+DEFAULT_FEED_URL = "https://aihot.news/feed.xml"
 
 
-DEFAULT_PAPER_FEED_URL = "https://aihot.virxact.com/feed/category/paper.xml"
+DEFAULT_PAPER_FEED_URL = "https://aihot.news/feed/category/paper.xml"
 
 
-DEFAULT_ALL_FEED_URL = "https://aihot.virxact.com/feed/all.xml"
+DEFAULT_ALL_FEED_URL = "https://aihot.news/feed/all.xml"
 
 
-DEFAULT_DAILY_URL = "https://aihot.virxact.com/daily"
+DEFAULT_DAILY_URL = "https://aihot.news/daily"
 
 
 DEFAULT_BESTBLOGS_AI_FEED_URL = "https://www.bestblogs.dev/en/feeds/rss?category=ai&minScore=90"
@@ -234,7 +234,7 @@ URL_RE = re.compile(r"https?://[^\s<>()\"']+")
 AIHOT_ITEM_RE = re.compile(r"aihot\.(?:virxact\.com|news)/items/([^/?#]+)")
 
 
-AIHOT_DAILY_ITEM_RE = re.compile(r'<a href="/items/([^\"]+)"[^>]*>(.*?)</a>', re.S)
+AIHOT_DAILY_ITEM_RE = re.compile(r"""<a\b[^>]*\bhref\s*=\s*["']/items/([^"'?#]+)[^"']*["'][^>]*>(.*?)</a>""", re.S | re.I)
 
 
 ARXIV_RE = re.compile(r"arxiv\.org/(?:abs|pdf)/([0-9]{4}\.[0-9]{4,5})(?:v\d+)?", re.I)

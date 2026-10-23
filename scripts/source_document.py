@@ -47,8 +47,20 @@ def read_document(raw):
                 body, kind = longest, 'article'
             body = body if body is not None else soup
     text = re.sub(r'\s+', ' ', body.get_text(' ', strip=True))
+    # Preserve references from the actual article, not navigation or the whole
+    # page. These are discovery leads, never verified aliases of this article.
+    references = []
+    for a in body.select('a[href]'):
+        href = a.get('href', '')
+        if href and not href.startswith(('#', 'javascript:', 'mailto:')):
+            row = {'href': href, 'label': a.get_text(' ', strip=True)[:200]}
+            if row not in references:
+                references.append(row)
+        if len(references) >= 80:
+            break
     identity = {'declared_urls': urls, 'og_type': og_type.get('content', '') if og_type else '',
                 'body_kind': kind, 'body_chars': len(text),
+                'article_references': references,
                 'response_sha256': hashlib.sha256(raw.encode()).hexdigest()}
     return title, text, dates, identity
 

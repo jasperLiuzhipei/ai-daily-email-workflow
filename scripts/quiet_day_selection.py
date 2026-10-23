@@ -2,6 +2,7 @@
 from copy import deepcopy
 from datetime import datetime, timedelta
 from editorial_value import CONTRACT
+import publication_priority
 
 DEFAULTS = {'enabled': False, 'min_news_trigger': 3, 'thresholds': [65, 60],
             'max_supplemental_news': 4, 'catchup_hours': 72,
@@ -69,7 +70,11 @@ def _select_quiet_day(candidates, policy, window, recovery, research_count=1, ma
         from event_editorial import event_family_key
         families = {event_family_key(c) for c in research + news} - {''}
         additions = []
-        for c in sorted(rejected, key=lambda c: (-(c.get('editorial_assessment', {}).get('score') or 0), c['event_id'])):
+        def rank(c):
+            if publication_priority.enabled(policy.get('news_budget')):
+                return publication_priority.news_rank(c, policy['news_budget'])
+            return (-(c.get('editorial_assessment', {}).get('score') or 0), c['event_id'])
+        for c in sorted(rejected, key=rank):
             family = event_family_key(c)
             if (c.get('editorial_news_window_eligible', True)
                     or not is_catchup(c, window, q['catchup_hours'])
@@ -84,12 +89,13 @@ def _select_quiet_day(candidates, policy, window, recovery, research_count=1, ma
             c['quiet_day_admission'] = {'label': '近期补漏', 'original_published_at': str(c.get('published_at', '')),
                 'base_threshold': policy['publish_threshold'], 'admission_threshold': policy['publish_threshold'],
                 'score_unchanged': c['editorial_assessment']['score']}
-            c['display_tier'] = 'brief'
+            c['display_tier'] = 'deep' if (publication_priority.enabled(policy.get('news_budget'))
+                and publication_priority.level(c) == 2) else 'brief'
             c['editorial_decision'] = {'action': 'include', 'reason': '近期补漏，按同一价值准入规则：' + c['editorial_assessment']['decision_reason']}
             additions.append(c)
             if family: families.add(family)
         news.extend(additions)
-        news.sort(key=lambda c: (-c['editorial_assessment']['score'], c['event_id']))
+        news.sort(key=rank)
         audit.update(mode='value_qualified_catchup', added_event_ids=[c['event_id'] for c in additions],
                      final_news_count=len(news))
         added = set(audit['added_event_ids'])

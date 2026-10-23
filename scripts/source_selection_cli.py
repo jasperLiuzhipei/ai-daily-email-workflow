@@ -12,6 +12,7 @@ import argparse
 from concurrent.futures import as_completed
 from datetime import datetime
 import json
+import time
 from daily_config import load_audience_profiles
 from daily_config import load_selection_policy, load_legacy_selection_policy
 from source_freshness import DEFAULT_MAX_LOOKBACK_HOURS, candidate_in_window, lookback_floor
@@ -92,6 +93,7 @@ def main() -> None:
     parser.add_argument("--end-at", help="Inclusive end time, ISO format. Defaults to now in Asia/Shanghai.")
     parser.add_argument("--feed-url", default=DEFAULT_FEED_URL)
     parser.add_argument("--paper-feed-url", default=DEFAULT_PAPER_FEED_URL)
+    parser.add_argument('--no-aihot-api', action='store_true', help='Use legacy RSS discovery for offline replay.')
     parser.add_argument(
         "--all-feed-url",
         default=DEFAULT_ALL_FEED_URL,
@@ -295,6 +297,8 @@ def main() -> None:
         None,
     )
     daily_url = args.daily_url or str((daily_source or {}).get("url") or DEFAULT_DAILY_URL)
+    if daily_url.startswith('https://aihot.virxact.com/'):
+        daily_url = daily_url.replace('https://aihot.virxact.com/', 'https://aihot.news/', 1)
     official_sources = [
         source
         for source in source_registry["sources"]
@@ -339,9 +343,24 @@ def main() -> None:
 
     all_candidates: list[dict[str, Any]] = []
     all_duplicates: list[dict[str, Any]] = []
-    if not args.no_aihot_all:
+    from aihot_discovery import fetch_window, candidates_from_items, fetch_hot_topics, discover_pending, coverage_receipts, FetchBudget
+    api_policy = policy_value('aihot_api', default={})
+    api_enabled = (bool(api_policy.get('enabled')) and context.DISCOVERY_ONLY
+                   and not args.no_aihot_api and not args.no_aihot_all)
+    api_audit, hot_audit = {'status': 'disabled', 'complete': False}, {'status': 'disabled', 'topics': []}
+    hot_candidates, hot_duplicates = [], []
+    api_fetch = FetchBudget(run_curl, int(api_policy.get('budget_seconds', 180)))
+    if api_enabled:
+        api_start = min(news_start_at, gap_audit_start_at or news_start_at)
+        rows, api_audit = fetch_window(api_start, end_at, all_feed_path.parent / 'aihot_api', api_fetch,
+                                       max_pages=int(api_policy.get('max_pages', 12)))
+        all_candidates, all_duplicates, api_excluded = candidates_from_items(rows, api_start, end_at, previous_items)
+        api_audit['exclusions'] = api_excluded
+        hot_candidates, hot_duplicates, hot_audit = fetch_hot_topics(
+            lookback_floor_at, end_at, all_feed_path.parent / 'aihot_hot_topics', previous_items, api_fetch)
+    if not args.no_aihot_all and not api_audit['complete']:
         all_xml_text = run_curl(args.all_feed_url, all_feed_path)
-        all_candidates, all_duplicates = parse_feed(
+        fallback_candidates, fallback_duplicates = parse_feed(
             all_xml_text,
             aihot_recall_start_at,
             end_at,
@@ -351,13 +370,19 @@ def main() -> None:
             news_start_at=news_start_at,
             gap_audit_start_at=gap_audit_start_at,
         )
+        all_candidates.extend(fallback_candidates)
+        all_duplicates.extend(fallback_duplicates)
+        api_audit['fallback'] = 'rss_snapshot; full_window_coverage_not_confirmed'
 
     daily_entries: list[dict[str, Any]] = []
     daily_matches: list[dict[str, Any]] = []
     daily_fetch_error = ""
     if not args.no_aihot_daily:
         try:
-            daily_entries = parse_aihot_daily_entries(run_curl(daily_url, daily_path))
+            daily_html = run_curl(daily_url, daily_path)
+            daily_entries = parse_aihot_daily_entries(daily_html)
+            if not daily_entries:
+                daily_fetch_error = 'Daily returned no parsed entries; editorial signal unavailable.'
         except SourceSelectionError as exc:
             # Daily is an optional editorial signal. Its temporary failure must
             # never prevent the primary feed selector from producing a daily.
@@ -521,16 +546,17 @@ def main() -> None:
         )
 
     candidates = merge_candidates(
-        exact_merged_candidates + paper_lookback_candidates + direct_candidates + bestblogs_candidates
+        exact_merged_candidates + paper_lookback_candidates + direct_candidates + bestblogs_candidates + hot_candidates
     )
     backlog_policy = policy_value("backlog", default={})
     backlog_summary = {"enabled": bool(backlog_policy.get("enabled", True)), "recalled": [],
-                       "excluded_by_freshness": []}
+                       "excluded_by_freshness": [], "excluded_by_quota": []}
     if backlog_summary["enabled"]:
         backlog = sync_backlog(Path("daily_runs"), run_date, policy=backlog_policy)
         for recalled in recall_candidates(
             backlog, run_date, start_at=lookback_floor_at, end_at=end_at,
             freshness_exclusions=backlog_summary["excluded_by_freshness"],
+            quota_exclusions=backlog_summary['excluded_by_quota'],
         ):
             if not candidate_in_window(recalled, lookback_floor_at, end_at):
                 backlog_summary["excluded_by_freshness"].append({
@@ -545,6 +571,7 @@ def main() -> None:
                 backlog_summary["recalled"].append({"id": recalled["backlog_id"],
                     "title": recalled["title"], "first_seen": recalled["backlog_first_seen"]})
         candidates = merge_candidates(candidates)
+    pending_discovery_audit = []
     # Every discovery adapter and recall route must satisfy the same final
     # bound before source reading or model selection (including research).
     freshness_exclusions = [
@@ -561,6 +588,7 @@ def main() -> None:
         + paper_lookback_duplicates
         + direct_duplicates
         + bestblogs_duplicates
+        + hot_duplicates
     )
     if not context.DISCOVERY_ONLY:
         apply_sparse_technique_bonus(candidates)
@@ -578,6 +606,15 @@ def main() -> None:
         output_dir=output_path.parent / "primary_verification",
         rescore=lambda candidate: prepare_candidate(candidate, previous_items)[0],
     )
+    # Search after verification so today's unresolved important leads receive
+    # the same alternate-report discovery as recalled pending items. Results
+    # remain independent candidates until the normal event grouping step.
+    if api_enabled:
+        recovered, recovered_duplicates, pending_discovery_audit = discover_pending(
+            candidates, lookback_floor_at, end_at, all_feed_path.parent / 'aihot_pending_search',
+            previous_items, api_fetch, max_queries=int(api_policy.get('pending_search_queries', 4)))
+        candidates = merge_candidates(candidates + recovered)
+        duplicates.extend(recovered_duplicates)
     # Recompute one-time editorial bonuses after rescore, never accumulate them.
     rescored = []
     for candidate in candidates:
@@ -652,6 +689,10 @@ def main() -> None:
         requested_start_at=requested_start_at.isoformat(),
     )
     output["source"]["freshness_exclusions"] = freshness_exclusions
+    api_audit['http_seconds_used'] = round(int(api_policy.get('budget_seconds', 180)) - api_fetch.remaining, 3)
+    output['source']['aihot_api'] = api_audit
+    output['source']['aihot_hot_topics'] = hot_audit
+    output['source']['pending_discovery'] = pending_discovery_audit
     if semantic_mode:
         from event_editorial_runtime import evaluate_candidates, apply_selection
         from event_editorial import news_window_eligible as event_news_window_eligible
@@ -670,6 +711,7 @@ def main() -> None:
                                  research_count=args.research_count, max_news_count=args.max_news_count)
         selected_research, selected_news = output['selected_research'], output['selected_news']
         output['source']['health']['selected_provenance'] = source_mix_summary(selected_research + selected_news)
+        output['source']['hot_topic_coverage'] = coverage_receipts(hot_audit, output, duplicates)
     output["backlog"] = backlog_summary
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -677,6 +719,11 @@ def main() -> None:
         sync_backlog(Path("daily_runs"), run_date, policy=backlog_policy)
 
     print(f"wrote {output_path}")
+    if api_enabled:
+        print(f"aihot_window_coverage={api_audit['status']} pages={api_audit.get('pages', 0)} "
+              f"records={api_audit.get('item_count', 0)} hot_topics={hot_audit['status']}")
+        if not api_audit['complete']:
+            print('WARNING: AIHOT full-window coverage is incomplete; see source.aihot_api in the selection receipt.')
     print(
         f"candidates_after_dedupe={len(candidates)} "
         f"excluded_duplicates={len(duplicates)} "

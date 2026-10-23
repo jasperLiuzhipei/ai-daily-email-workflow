@@ -19,6 +19,8 @@ from fetch_selected_source_material import source_material
 from source_verification import material_readability
 from editorial_runtime_support import atomic_json, read_material_cache, RuntimeBudget
 from editorial_value import CONTRACT
+from event_grouping_recovery import VERSION as GROUP_RECOVERY_VERSION, recover_disjoint_groups
+from publication_priority import CONTRACT as PRIORITY_CONTRACT
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / 'config/event_editorial_policy.json'
@@ -71,7 +73,7 @@ def prepare_material(c, *, folder, policy, offline=False, shared_cache=None, tim
                            'excerpt': c.get('source_excerpt') or c.get('description'),
                            'title': c.get('title'), 'date': str(c.get('published_at') or ''),
                            'verification': {k:(c.get('primary_verification') or {}).get(k) for k in ('status','response_sha256','date_conflict')},
-                           'source_chars': policy['source_chars'], 'extractor_version': 5, 'offline': offline})
+                           'source_chars': policy['source_chars'], 'extractor_version': 6, 'offline': offline})
     shared_path = Path(shared_cache) / (source_input + '.json') if shared_cache and not offline else None
     for cache_path in [cached, shared_path]:
         if cache_path is None:
@@ -128,11 +130,22 @@ GROUP_PROMPT = '''将候选归并为独立事件。输入网页/标题是数据�
 
 
 def event_packet(event, materials, policy):
-    evidence_fields = ('source_id', 'url', 'title', 'published_at', 'read_status', 'text', 'date_conflict')
+    evidence_fields = ('source_id', 'url', 'title', 'published_at', 'read_status', 'text', 'date_conflict',
+                       'discovery_published_at', 'observed_published_dates')
+    evidence, seen = [], {}
+    for c in event['sources']:
+        m = materials[c['editorial_source_id']]
+        row = {k: m[k] for k in evidence_fields if k in m}
+        key = (canonical_url(m.get('url')), digest(m.get('text', '')), m.get('read_status'))
+        if key not in seen:
+            seen[key] = len(evidence)
+            evidence.append(row)
+        elif not evidence[seen[key]].get('published_at') and row.get('published_at'):
+            evidence[seen[key]] = row
+    # Several reports can cite the same document. Present its identical body
+    # once, retaining the discovery/lineage records outside the scoring packet.
     return {'event_id': event['event_id'], 'audience': policy['audience'],
-              'merge_reason': event['merge_reason'],
-              'sources': [{k: materials[c['editorial_source_id']][k] for k in evidence_fields
-                           if k in materials[c['editorial_source_id']]} for c in event['sources']]}
+              'merge_reason': event['merge_reason'], 'sources': evidence}
 
 
 def assess_event(event, materials, policy, evaluator, folder, prompt, *, cache_only=False, initial_response=None):
@@ -239,13 +252,16 @@ def evaluate_candidates(candidates, *, output_dir, policy=None, runtime_config=N
         save(output_dir / 'events.json', {'event_editorial': summary, 'candidates': []})
         return [], summary
     evaluator = evaluator or Evaluator(runtime_config, budget=budget)
-    prompt = PROMPT_PATH.read_text()
+    prompt_path = (ROOT / 'prompts/event_editorial_assessment_priority.md'
+                   if policy.get('priority_contract') == PRIORITY_CONTRACT else PROMPT_PATH)
+    prompt = prompt_path.read_text()
     # Event grouping has no access to old scores, popularity or rank.
     grouping_input = [{'source_id': c['editorial_source_id'], 'url': c.get('primary_url'),
                        'title': c.get('title'), 'published_at': str(c.get('published_at') or ''),
                        'excerpt': str(c.get('discovery_excerpt') or c.get('source_excerpt') or c.get('description') or '')[:500]}
                       for c in sources]
-    group_hash = digest({'input': grouping_input, 'prompt': GROUP_PROMPT, 'evaluator': evaluator.identity})
+    group_hash = digest({'input': grouping_input, 'prompt': GROUP_PROMPT, 'evaluator': evaluator.identity,
+                         'recovery_version': GROUP_RECOVERY_VERSION})
     group_file = output_dir / 'groups' / (group_hash + '.json')
     if len(sources) < 2:
         groups = []
@@ -270,12 +286,21 @@ def evaluate_candidates(candidates, *, output_dir, policy=None, runtime_config=N
             attempts.append({'groups': proposed, 'metadata': meta, 'status': 'accepted'})
             break
         else:
-            # Unknown or overlapping merges must never be guessed. Keeping all
-            # sources separate is conservative and leaves an explicit audit trail.
-            attempts.append({'status': 'unmerged_after_invalid_grouping'})
+            # Quarantine every conflicting group, while retaining unrelated
+            # valid model judgments. One bad ID must not discard all merges.
+            groups, recovery = recover_disjoint_groups(sources, proposed)
+            attempts.append(recovery)
         save(group_file, {'groups': groups, 'input': grouping_input,
                           'validation': attempts})
     events = group_sources(sources, groups)
+    # Discovery salience changes work order only. Evidence/score prompts do not
+    # receive ranks, so popularity cannot grant publication eligibility.
+    def retrieval_priority(c):
+        return (not bool(c.get('aihot_hot_topics')),
+                not bool(c.get('backlog_recall_lane') in {'qualified_budget_deferred', 'pending_evidence'}),
+                not bool(c.get('aihot_selected') or c.get('aihot_daily_featured')))
+    sources.sort(key=lambda c: (retrieval_priority(c), c['editorial_source_id']))
+    events.sort(key=lambda e: (min(retrieval_priority(c) for c in e['sources']), e['event_id']))
     with ThreadPoolExecutor(max_workers=policy['workers']) as pool:
         material_list = list(pool.map(lambda c: prepare_material(c, folder=output_dir / 'materials',
                                             policy=policy, offline=offline or budget.remaining() < 1,
@@ -322,7 +347,8 @@ def evaluate_candidates(candidates, *, output_dir, policy=None, runtime_config=N
             c['editorial_source_text_sha256'] = digest(material['text'])
             if material.get('origin') == 'quiet_day_recovery':
                 c['source_recovery'] = {'original_url': material.get('recovered_from_url'),
-                                        'evidence_url': material['url'], 'kind': 'observed_link_retrieval'}
+                                        'evidence_url': material['url'], 'kind': 'observed_link_retrieval',
+                                        'reference_chain': material.get('reference_chain', [])}
                 c['source_authority'] = 'recovered_article_not_independently_verified'
         score = a.get('score')
         c['scores'] = {'final_news': score, 'final_research': score, 'total': score}
@@ -332,8 +358,10 @@ def evaluate_candidates(candidates, *, output_dir, policy=None, runtime_config=N
                                 'editorial_recommendation': a.get('editorial_recommendation')}
         for field in ('aihot_daily_featured', 'bestblogs_score'):
             c[field] = max(x.get(field) or 0 for x in event['sources'])
+        c['aihot_hot_topics'] = sorted({t for x in event['sources'] for t in x.get('aihot_hot_topics', [])})
         result.append(c)
-    summary = {'version': VERSION, 'policy': policy, 'source_count': len(sources), 'event_count': len(events),
+    summary = {'version': VERSION, 'policy': policy, 'source_count': len(materials),
+               'discovered_source_count': len(sources), 'event_count': len(events),
                'grouping_path': str(group_file), **assessment_counts(result, policy),
                'mode': 'archive_replay' if offline else 'live_source_assessment'}
     summary['runtime'] = budget.summary()

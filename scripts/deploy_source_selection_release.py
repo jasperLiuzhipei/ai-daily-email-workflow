@@ -15,7 +15,7 @@ import tempfile
 import argparse
 import os
 
-SAFE_CONFIGS = {'selection_policy.json','legacy_selection_policy.json','event_editorial_policy.json','email_quality_policy.json'}
+SAFE_CONFIGS = {'selection_policy.json','legacy_selection_policy.json','event_editorial_policy.json','event_editorial_policy.priority.json','email_quality_policy.json'}
 VALIDATION_PATTERNS = [
     'test_automatic_delivery.py',
     'test_email_quality_control.py',
@@ -23,6 +23,8 @@ VALIDATION_PATTERNS = [
     'test_manual_news_editorial_approval.py', 'test_source_selection_refactor.py', 'test_source_release.py',
     'test_high_value_coverage.py', 'test_source_quality.py', 'test_source_selection_routing.py',
     'test_source_refresh_adapters.py', 'test_editorial_backlog.py',
+    'test_discovery_coverage.py', 'test_news_budget.py',
+    'test_event_source_followup.py', 'test_grouping_recovery.py', 'test_publication_priority.py',
     'test_daily_prose.py', 'test_research_prose_recovery.py', 'test_news_prose_recovery.py',
     'test_newspaper_sections.py', 'test_newspaper_text.py', 'test_newspaper_illustrated.py',
     'test_prod_prose_gate.py', 'test_approved_editorial_v2.py',

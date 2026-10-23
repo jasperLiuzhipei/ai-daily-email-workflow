@@ -1,6 +1,7 @@
 """Source candidates."""
 from __future__ import annotations
 from typing import Any
+from copy import deepcopy
 from source_identity import (
     candidate_identities,
     normalize_text,
@@ -58,16 +59,22 @@ def source_variant_preference(candidate: dict[str, Any]) -> tuple[int, int, int,
         int(candidate.get("source_authority") == "official_research"),
         int(candidate.get("source_quality_tier") == "primary"),
         int(candidate.get("source_pool") == "research"),
-        float(candidate.get("score_breakdown", {}).get("source_reliability", 0)),
-        float(candidate.get("scores", {}).get("final_research", 0)),
-        float(candidate.get("scores", {}).get("final_news", 0)),
+        float(candidate.get("score_breakdown", {}).get("source_reliability") or 0),
+        float(candidate.get("scores", {}).get("final_research") or 0),
+        float(candidate.get("scores", {}).get("final_news") or 0),
     )
 
 
 def merge_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     from event_editorial import candidate_urls
     merged: dict[str, dict[str, Any]] = {}
-    for candidate in candidates:
+    for original in candidates:
+        candidate = deepcopy(original)
+        candidate.setdefault('source_time_variants', [{
+            'published_at': str(candidate.get('published_at') or ''),
+            'discovered_at': candidate.get('discovered_at'), 'aihot_url': candidate.get('aihot_url'),
+            'feed_source': candidate.get('feed_source'),
+        }])
         key = candidate_merge_key(candidate)
         if not key:
             continue
@@ -77,6 +84,14 @@ def merge_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
 
         previous = existing
+        times = list(previous.get('source_time_variants', []))
+        for variant in candidate.get('source_time_variants', []):
+            if variant not in times:
+                times.append(variant)
+        hot_topics = sorted(set(previous.get('aihot_hot_topics', [])) | set(candidate.get('aihot_hot_topics', [])))
+        aihot_selected = bool(previous.get('aihot_selected') or candidate.get('aihot_selected'))
+        backlog_fields = {k: previous.get(k) or candidate.get(k) for k in
+                          ('backlog_id', 'backlog_first_seen', 'backlog_recall_lane')}
         aliases = sorted(set(candidate_urls(previous)) | set(candidate_urls(candidate)))
         existing_sources = set(str(previous.get("feed_source", "")).split("+"))
         candidate_sources = set(str(candidate.get("feed_source", "")).split("+"))
@@ -104,6 +119,14 @@ def merge_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
             existing = preferred
         existing["feed_source"] = "+".join(sorted(source for source in sources if source))
         existing['coverage_source_urls'] = aliases
+        existing['source_time_variants'] = times
+        existing['aihot_hot_topics'] = hot_topics
+        existing['aihot_selected'] = aihot_selected
+        existing.update({k: v for k, v in backlog_fields.items() if v})
+        # Keep the preferred source's publication time. Conflicting variants
+        # require review; a new receipt or repost is not a new release date.
+        if len({v.get('published_at') for v in times if v.get('published_at')}) > 1:
+            existing['timing_review_required'] = True
         source_names = [
             value
             for value in [previous_source_name, candidate_source_name]
